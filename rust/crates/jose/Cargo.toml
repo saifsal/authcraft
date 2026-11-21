@@ -2,7 +2,7 @@
 name = "jose"
 version = "0.1.0"
 edition = "2021"
-description = "Hand-written JOSE layer (JWS, JWK, thumbprints) for identity-provider project. Educational use only."
+description = "Hand-written JOSE layer (JWS, JWK, thumbprints) for the authcraft project. Educational use only."
 publish = false
 
 [dependencies]

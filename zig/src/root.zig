@@ -1,4 +1,4 @@
-//! Zig JOSE/JWT verifier for identity-provider (M0).
+//! Zig JOSE/JWT verifier for authcraft (M0).
 //!
 //! Mirrors the Rust `jose` crate against the shared vectors in
 //! `testvectors/`. Strict base64url and JSON parsing are present so far.

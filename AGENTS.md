@@ -1,8 +1,8 @@
-# identity-provider
+# authcraft
 
 ## Overview
 
-identity-provider is an educational OAuth 2.0 / OpenID Connect identity provider. Its purpose is to learn the protocols by implementing the layers underneath them (JOSE, token issuance, verification, and later the OAuth and OIDC flows) and to compare independent implementations of the same security-critical code with a shared test-vector contract. It has had no external review. It is not a production identity provider.
+authcraft is an educational OAuth 2.0 / OpenID Connect identity provider. Its purpose is to learn the protocols by implementing the layers underneath them (JOSE, token issuance, verification, and later the OAuth and OIDC flows) and to compare independent implementations of the same security-critical code with a shared test-vector contract. It has had no external review. It is not a production identity provider.
 
 Milestone M0 is in progress. The checked-in Rust library crate `jose` at `rust/crates/jose` signs and verifies compact JWS/JWT payloads, parses JWK and JWKS documents, computes RFC 7638 thumbprints, and enforces the verifier rules in `docs/adr/0003-verifier-check-order.md`. Generated vectors covering the ADR 0003 minimum negative set and positive time-boundary cases live under `testvectors/generated/`; compact RFC examples under `testvectors/rfc/`. The Zig package at `zig/` has begun: strict base64url and JSON parsers matching the Rust rules (including duplicate-key rejection). Still outstanding for M0: the rest of the Zig verifier and a Go differential harness. Later milestones (OAuth, OIDC, token lifecycle, authentication, control plane, federation) are planned and have no code yet.
 

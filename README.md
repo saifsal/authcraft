@@ -1,4 +1,4 @@
-# identity-provider
+# authcraft
 
 An educational OAuth 2.0 / OpenID Connect identity provider. The work checked in today is a Rust library that signs and verifies compact JWS and JWT values by hand, so the JOSE rules are visible and can later be compared across languages.
 

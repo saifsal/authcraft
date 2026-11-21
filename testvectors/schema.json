@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/idp/testvectors/schema.json",
-  "title": "idp JOSE test vector",
+  "$id": "https://example.invalid/authcraft/testvectors/schema.json",
+  "title": "authcraft JOSE test vector",
   "description": "One verification case: a token, the keys and policy to verify it with, and the expected verdict. Every implementation must produce exactly this verdict. See docs/adr/0002-vectors-are-the-contract.md and docs/adr/0003-verifier-check-order.md.",
   "type": "object",
   "required": ["id", "source", "jwks", "policy", "token", "expect"],

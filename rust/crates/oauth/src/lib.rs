@@ -9,6 +9,7 @@ pub mod code;
 pub mod denylist;
 pub mod dpop;
 pub mod error;
+pub mod federation;
 pub mod id_token;
 pub mod keyring;
 pub mod par;
@@ -29,5 +30,9 @@ pub use server::{
     DynamicClientSuccess, Introspection, LoginSubject, ParSuccess, PendingAuthorization,
     ServerConfig, TokenRequest, TokenSuccess, TokenTypeHint, TotpEnrollment, UserInfo, UserSummary,
     DEMO_ADMIN_TOKEN,
+};
+pub use federation::{
+    id_token_from_token_response, login_subject_from_id_token, start_oidc_login, DirectoryBind,
+    MemoryDirectory, MemoryDirectoryUser, OidcRpConfig, OidcRpError, OidcRpStart,
 };
 pub use users::{hash_password, AuthnError, UserRecord, UserStore, DEMO_ALICE_PASSWORD};

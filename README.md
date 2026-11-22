@@ -262,10 +262,12 @@ Useful design notes while changing verification:
 - [`docs/adr/0009-hardening-par-dpop.md`](docs/adr/0009-hardening-par-dpop.md) — M4 PAR / DPoP profile.
 - [`docs/adr/0010-authentication.md`](docs/adr/0010-authentication.md) — M5 passwords / TOTP / WebAuthn.
 - [`docs/adr/0011-control-plane.md`](docs/adr/0011-control-plane.md) — M6 admin / DCR / SCIM.
+- [`docs/adr/0012-federation.md`](docs/adr/0012-federation.md) — M7 OIDC RP / LDAP federation.
 - [`docs/oauth-m3.md`](docs/oauth-m3.md) — M3 token lifecycle runbook.
 - [`docs/oauth-m4.md`](docs/oauth-m4.md) — M4 hardening runbook.
 - [`docs/oauth-m5.md`](docs/oauth-m5.md) — M5 authentication runbook.
 - [`docs/oauth-m6.md`](docs/oauth-m6.md) — M6 control plane runbook.
+- [`docs/oauth-m7.md`](docs/oauth-m7.md) — M7 federation runbook.
 - [`docs/rfc-9700-checklist.md`](docs/rfc-9700-checklist.md) — RFC 9700 BCP vs authcraft status.
 - [`docs/oauth-m1.md`](docs/oauth-m1.md) — how to run the M1 library and HTTP demo.
 - [`docs/oauth-m2.md`](docs/oauth-m2.md) — how to exercise OIDC discovery, ID tokens, and UserInfo.
@@ -283,7 +285,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 | **M4** | Hardening: PAR, DPoP, RFC 9700 checklist | Complete for this slice: optional PAR + DPoP, plus [RFC 9700 checklist](docs/rfc-9700-checklist.md). See [ADR 0009](docs/adr/0009-hardening-par-dpop.md) and [docs/oauth-m4.md](docs/oauth-m4.md). |
 | **M5** | Authentication: Argon2id passwords, TOTP, WebAuthn | Complete for this slice: Argon2id passwords, TOTP and WebAuthn second factors ([ADR 0010](docs/adr/0010-authentication.md), [docs/oauth-m5.md](docs/oauth-m5.md)). |
 | **M6** | Control plane: admin API, dynamic client registration, SCIM 2.0 | Complete for this slice: admin API, RFC 7591 DCR, SCIM Users ([ADR 0011](docs/adr/0011-control-plane.md), [docs/oauth-m6.md](docs/oauth-m6.md)). |
-| M7 | Federation: OIDC relying-party connector, LDAP gateway | Planned |
+| **M7** | Federation: OIDC relying-party connector, LDAP gateway | In progress. B1 OIDC RP ([ADR 0012](docs/adr/0012-federation.md), [docs/oauth-m7.md](docs/oauth-m7.md)). LDAP next. |
 | M8 | Assurance: OpenID conformance suite, attack harness, fuzzing in CI | Planned |
 
 [`docs/rfc-conformance.md`](docs/rfc-conformance.md) is the M0 scope map and the rule for marking a behavior conformant (shared vectors plus agreement across implementations).

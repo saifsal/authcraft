@@ -28,6 +28,198 @@ fn cookie_from(res: &axum::response::Response) -> String {
 }
 
 #[tokio::test]
+async fn oidc_rp_federation_issues_code() {
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use jose::b64url;
+    use jose::jwk::PublicKey;
+    use jose::signing::{self, generate_signing_key};
+    use oauth::OidcRpConfig;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    let upstream_key = generate_signing_key(Alg::EdDSA).unwrap();
+    let kid = upstream_key.public.thumbprint();
+    let jwks_doc = match &upstream_key.public {
+        PublicKey::Ed25519 { x } => {
+            let x = b64url::encode(x);
+            format!(
+                r#"{{"keys":[{{"kty":"OKP","crv":"Ed25519","x":"{x}","kid":"{kid}","alg":"EdDSA","use":"sig"}}]}}"#
+            )
+        }
+        _ => panic!("eddsa"),
+    };
+    let upstream_key = Arc::new(upstream_key);
+    let kid = Arc::new(kid);
+    let jwks_doc = Arc::new(jwks_doc);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let issuer = format!("http://{addr}");
+    let issuer_for_token = issuer.clone();
+    let upstream = {
+        let jwks_doc = jwks_doc.clone();
+        let upstream_key = upstream_key.clone();
+        let kid = kid.clone();
+        Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                get({
+                    let issuer = issuer.clone();
+                    move || {
+                        let issuer = issuer.clone();
+                        async move {
+                            Json(serde_json::json!({
+                                "issuer": issuer,
+                                "authorization_endpoint": format!("{issuer}/authorize"),
+                                "token_endpoint": format!("{issuer}/token"),
+                                "jwks_uri": format!("{issuer}/jwks"),
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/jwks",
+                get({
+                    let jwks_doc = jwks_doc.clone();
+                    move || {
+                        let jwks_doc = jwks_doc.clone();
+                        async move { ([("content-type", "application/json")], (*jwks_doc).clone()) }
+                    }
+                }),
+            )
+            .route(
+                "/token",
+                post({
+                    let upstream_key = upstream_key.clone();
+                    let kid = kid.clone();
+                    let issuer = issuer_for_token.clone();
+                    move |body: String| {
+                        let upstream_key = upstream_key.clone();
+                        let kid = kid.clone();
+                        let issuer = issuer.clone();
+                        async move {
+                            // Nonce is embedded in the authorization code: "code.<nonce>".
+                            let nonce = body
+                                .split('&')
+                                .find_map(|p| p.strip_prefix("code="))
+                                .and_then(|c| {
+                                    let c = urlencoding_decode(c);
+                                    c.strip_prefix("code.").map(str::to_owned)
+                                })
+                                .unwrap_or_else(|| "missing".into());
+                            let now = now_unix();
+                            let header =
+                                format!(r#"{{"alg":"EdDSA","typ":"JWT","kid":"{}"}}"#, *kid);
+                            let payload = format!(
+                                r#"{{"iss":"{issuer}","aud":"authcraft-rp","sub":"fed-user","nonce":"{nonce}","exp":{},"iat":{now},"name":"Fed","email":"fed@example.com"}}"#,
+                                now + 300
+                            );
+                            let enc_h = b64url::encode(header.as_bytes());
+                            let enc_p = b64url::encode(payload.as_bytes());
+                            let input = format!("{enc_h}.{enc_p}");
+                            let sig =
+                                signing::sign(Alg::EdDSA, &upstream_key.pkcs8, input.as_bytes())
+                                    .unwrap();
+                            let id_token = format!("{input}.{}", b64url::encode(&sig));
+                            Json(serde_json::json!({
+                                "access_token": "upstream-at",
+                                "token_type": "Bearer",
+                                "id_token": id_token,
+                            }))
+                        }
+                    }
+                }),
+            )
+    };
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            upstream.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .ok();
+    });
+
+    let state = AppState::demo().with_oidc_rp(OidcRpConfig {
+        issuer: issuer.clone(),
+        client_id: "authcraft-rp".into(),
+        client_secret: None,
+        redirect_uri: "http://localhost:8089/login/oidc/callback".into(),
+        scopes: "openid profile email".into(),
+    });
+    let app = app(state.clone());
+
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let challenge = pkce::challenge_s256(verifier).unwrap();
+    let authorize_uri = format!(
+        "/authorize?response_type=code&client_id=spa&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state=fed",
+        urlencoding_encode("https://app.example/cb"),
+        urlencoding_encode(&challenge),
+    );
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&authorize_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = cookie_from(&res);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/login/oidc/start")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let location = res
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let state_param = query_param(&location, "state").expect("state");
+    let nonce = query_param(&location, "nonce").expect("nonce");
+
+    let callback = format!(
+        "/login/oidc/callback?code={}&state={}",
+        urlencoding_encode(&format!("code.{nonce}")),
+        urlencoding_encode(&state_param),
+    );
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(&callback)
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let location = res
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(location.starts_with("https://app.example/cb?"));
+    assert!(query_param(&location, "code").is_some());
+}
+
+#[tokio::test]
 async fn authorize_login_token_verifies() {
     let state = AppState::demo();
     let app = app(state.clone());

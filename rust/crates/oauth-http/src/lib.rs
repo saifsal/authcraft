@@ -1,4 +1,4 @@
-//! Axum HTTP surface for authcraft OAuth + OIDC + authn (ADR 0005–0010).
+//! Axum HTTP surface for authcraft OAuth + OIDC + authn + federation (ADR 0005–0012).
 
 #![forbid(unsafe_code)]
 
@@ -15,7 +15,7 @@ use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
     AuthorizationServer, AuthorizeRequest, Client, DynamicClientRequest, LoginSubject, OAuthError,
-    PendingAuthorization, ServerConfig, TokenRequest, TokenTypeHint, DEMO_ADMIN_TOKEN,
+    OidcRpConfig, PendingAuthorization, ServerConfig, TokenRequest, TokenTypeHint, DEMO_ADMIN_TOKEN,
 };
 use serde::Deserialize;
 
@@ -26,12 +26,23 @@ struct MfaPending {
     login: LoginSubject,
 }
 
+/// In-flight OIDC RP login (outbound authorize).
+#[derive(Debug, Clone)]
+struct OidcPending {
+    ticket: String,
+    code_verifier: String,
+    nonce: String,
+}
+
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
     pub server: Arc<AuthorizationServer>,
     pending: Arc<Mutex<HashMap<String, PendingAuthorization>>>,
     mfa_pending: Arc<Mutex<HashMap<String, MfaPending>>>,
+    pub oidc_rp: Option<OidcRpConfig>,
+    oidc_pending: Arc<Mutex<HashMap<String, OidcPending>>>,
+    http: reqwest::Client,
 }
 
 impl AppState {
@@ -40,7 +51,15 @@ impl AppState {
             server: Arc::new(AuthorizationServer::new(config, clients, signing)),
             pending: Arc::new(Mutex::new(HashMap::new())),
             mfa_pending: Arc::new(Mutex::new(HashMap::new())),
+            oidc_rp: None,
+            oidc_pending: Arc::new(Mutex::new(HashMap::new())),
+            http: reqwest::Client::new(),
         }
+    }
+
+    pub fn with_oidc_rp(mut self, cfg: OidcRpConfig) -> Self {
+        self.oidc_rp = Some(cfg);
+        self
     }
 
     pub fn demo() -> Self {
@@ -75,6 +94,8 @@ pub fn app(state: AppState) -> Router {
         .route("/par", post(par))
         .route("/register", post(register_client))
         .route("/login", get(login_get).post(login_post))
+        .route("/login/oidc/start", get(oidc_start))
+        .route("/login/oidc/callback", get(oidc_callback))
         .route("/login/mfa", get(mfa_get).post(mfa_post))
         .route("/login/mfa/webauthn/start", post(mfa_webauthn_start))
         .route("/login/mfa/webauthn/finish", post(mfa_webauthn_finish))
@@ -474,10 +495,15 @@ async fn par(State(state): State<AppState>, Form(form): Form<ParForm>) -> Respon
     }
 }
 
-fn login_page(error: Option<&str>) -> Html<String> {
+fn login_page(error: Option<&str>, oidc_enabled: bool) -> Html<String> {
     let err = error
         .map(|e| format!("<p style=\"color:red\">{e}</p>"))
         .unwrap_or_default();
+    let oidc = if oidc_enabled {
+        r#"<p><a href="/login/oidc/start">Sign in with upstream OpenID Provider</a></p>"#
+    } else {
+        ""
+    };
     Html(format!(
         r#"<!doctype html>
 <html><head><title>authcraft login</title></head>
@@ -490,12 +516,13 @@ fn login_page(error: Option<&str>) -> Html<String> {
     <label>Password <input name="password" type="password" autocomplete="current-password" /></label>
     <button type="submit">Sign in</button>
   </form>
+  {oidc}
 </body></html>"#
     ))
 }
 
-async fn login_get() -> Html<String> {
-    login_page(None)
+async fn login_get(State(state): State<AppState>) -> Html<String> {
+    login_page(None, state.oidc_rp.is_some())
 }
 
 #[derive(Debug, Deserialize)]
@@ -527,6 +554,178 @@ fn redirect_with_code(success: &oauth::AuthorizationSuccess) -> Response {
     Redirect::to(url.as_str()).into_response()
 }
 
+async fn oidc_start(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(cfg) = state.oidc_rp.as_ref() else {
+        return (StatusCode::NOT_FOUND, "OIDC RP not configured").into_response();
+    };
+    let Some(ticket) = cookie_ticket(&headers) else {
+        return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
+    };
+    if !state
+        .pending
+        .lock()
+        .expect("pending lock")
+        .contains_key(&ticket)
+    {
+        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
+    }
+
+    let discovery_url = format!(
+        "{}/.well-known/openid-configuration",
+        cfg.issuer.trim_end_matches('/')
+    );
+    let disc: serde_json::Value = match state.http.get(&discovery_url).send().await {
+        Ok(r) => match r.json().await {
+            Ok(v) => v,
+            Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "upstream discovery failed").into_response();
+            }
+        },
+        Err(_) => return (StatusCode::BAD_GATEWAY, "upstream discovery failed").into_response(),
+    };
+    let Some(authz_ep) = disc.get("authorization_endpoint").and_then(|v| v.as_str()) else {
+        return (StatusCode::BAD_GATEWAY, "upstream missing authorization_endpoint")
+            .into_response();
+    };
+
+    let start = match oauth::start_oidc_login(cfg, authz_ep) {
+        Ok(s) => s,
+        Err(_) => return (StatusCode::BAD_REQUEST, "oidc start failed").into_response(),
+    };
+    state.oidc_pending.lock().expect("oidc lock").insert(
+        start.state.clone(),
+        OidcPending {
+            ticket,
+            code_verifier: start.code_verifier,
+            nonce: start.nonce,
+        },
+    );
+    Redirect::to(&start.authorize_url).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OidcCallbackQuery {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+}
+
+async fn oidc_callback(
+    State(state): State<AppState>,
+    Query(q): Query<OidcCallbackQuery>,
+) -> Response {
+    let Some(cfg) = state.oidc_rp.clone() else {
+        return (StatusCode::NOT_FOUND, "OIDC RP not configured").into_response();
+    };
+    if q.error.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            login_page(Some("Upstream login failed"), true),
+        )
+            .into_response();
+    }
+    let (Some(code), Some(state_param)) = (q.code.as_deref(), q.state.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "missing code or state").into_response();
+    };
+    let pending_oidc = {
+        let mut map = state.oidc_pending.lock().expect("oidc lock");
+        map.remove(state_param)
+    };
+    let Some(pending_oidc) = pending_oidc else {
+        return (StatusCode::BAD_REQUEST, "unknown oidc state").into_response();
+    };
+
+    let discovery_url = format!(
+        "{}/.well-known/openid-configuration",
+        cfg.issuer.trim_end_matches('/')
+    );
+    let disc: serde_json::Value = match state.http.get(&discovery_url).send().await {
+        Ok(r) => match r.json().await {
+            Ok(v) => v,
+            Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "upstream discovery failed").into_response();
+            }
+        },
+        Err(_) => return (StatusCode::BAD_GATEWAY, "upstream discovery failed").into_response(),
+    };
+    let Some(token_ep) = disc.get("token_endpoint").and_then(|v| v.as_str()) else {
+        return (StatusCode::BAD_GATEWAY, "upstream missing token_endpoint").into_response();
+    };
+    let Some(jwks_uri) = disc.get("jwks_uri").and_then(|v| v.as_str()) else {
+        return (StatusCode::BAD_GATEWAY, "upstream missing jwks_uri").into_response();
+    };
+
+    let mut form = vec![
+        ("grant_type", "authorization_code".to_owned()),
+        ("code", code.to_owned()),
+        ("redirect_uri", cfg.redirect_uri.clone()),
+        ("client_id", cfg.client_id.clone()),
+        ("code_verifier", pending_oidc.code_verifier.clone()),
+    ];
+    if let Some(secret) = &cfg.client_secret {
+        form.push(("client_secret", secret.clone()));
+    }
+    let token_body = match state.http.post(token_ep).form(&form).send().await {
+        Ok(r) => match r.text().await {
+            Ok(t) => t,
+            Err(_) => return (StatusCode::BAD_GATEWAY, "token response unreadable").into_response(),
+        },
+        Err(_) => return (StatusCode::BAD_GATEWAY, "token request failed").into_response(),
+    };
+    let id_token = match oauth::id_token_from_token_response(&token_body) {
+        Ok(t) => t,
+        Err(_) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                login_page(Some("Upstream token missing id_token"), true),
+            )
+                .into_response();
+        }
+    };
+
+    let jwks_body = match state.http.get(jwks_uri).send().await {
+        Ok(r) => match r.text().await {
+            Ok(t) => t,
+            Err(_) => return (StatusCode::BAD_GATEWAY, "jwks unreadable").into_response(),
+        },
+        Err(_) => return (StatusCode::BAD_GATEWAY, "jwks fetch failed").into_response(),
+    };
+    let jwks = match jose::jwks::Jwks::parse(jwks_body.as_bytes()) {
+        Ok(j) => j,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "jwks parse failed").into_response(),
+    };
+
+    let login = match oauth::login_subject_from_id_token(
+        &id_token,
+        &jwks,
+        &cfg,
+        &pending_oidc.nonce,
+        now_unix(),
+    ) {
+        Ok(l) => l,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                login_page(Some("Invalid upstream ID token"), true),
+            )
+                .into_response();
+        }
+    };
+
+    let pending = {
+        let mut map = state.pending.lock().expect("pending lock");
+        map.remove(&pending_oidc.ticket)
+    };
+    let Some(pending) = pending else {
+        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
+    };
+
+    match state.server.finish_authorize(pending, &login, now_unix()) {
+        Ok(success) => redirect_with_code(&success),
+        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
+    }
+}
+
 async fn login_post(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -550,7 +749,10 @@ async fn login_post(
     {
         Ok(login) => login,
         Err(_) => {
-            return (StatusCode::UNAUTHORIZED, login_page(Some("Invalid username or password")))
+            return (
+                StatusCode::UNAUTHORIZED,
+                login_page(Some("Invalid username or password"), state.oidc_rp.is_some()),
+            )
                 .into_response();
         }
     };

@@ -22,7 +22,7 @@ Educational mapping of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
 | DPoP nonce from AS | open | Clock-skew `iat` only |
 | Real resource-owner authentication | done | Argon2id + optional TOTP/WebAuthn 2FA (M5); stub login removed |
 | TLS / production deployment | open | Local demo binds only |
-| Sender-constrained refresh (DPoP) | open | Refresh tokens remain opaque bearer-style secrets |
+| Sender-constrained refresh (DPoP) | done | Refresh family stores `jkt` when issued with DPoP |
 | JAR / request objects | open | PAR body only |
 
 Profile ADRs: [0005](adr/0005-oauth-code-pkce.md), [0008](adr/0008-token-lifecycle.md),

@@ -3,7 +3,9 @@
 //! Each test names the attack and asserts a stable error code.
 
 use jose::alg::Alg;
-use jose::signing::generate_signing_key;
+use jose::b64url;
+use jose::jwk::PublicKey;
+use jose::signing::{self, generate_signing_key};
 use oauth::pkce;
 use oauth::{
     AuthorizationServer, AuthorizeRequest, Client, LoginSubject, ServerConfig, TokenRequest,
@@ -211,6 +213,81 @@ fn attack_refresh_token_reuse() {
             "",
         )
         .expect_err("reuse");
+    assert_eq!(err.code(), "invalid_grant");
+}
+
+fn make_dpop_proof(htm: &str, htu: &str, iat: i64, jti: &str) -> String {
+    let key = generate_signing_key(Alg::EdDSA).unwrap();
+    let x = match &key.public {
+        PublicKey::Ed25519 { x } => b64url::encode(x),
+        _ => panic!("eddsa"),
+    };
+    let header = format!(
+        r#"{{"typ":"dpop+jwt","alg":"EdDSA","jwk":{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}}}"#
+    );
+    let payload = format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}"}}"#);
+    let enc_h = b64url::encode(header.as_bytes());
+    let enc_p = b64url::encode(payload.as_bytes());
+    let input = format!("{enc_h}.{enc_p}");
+    let sig = signing::sign(Alg::EdDSA, &key.pkcs8, input.as_bytes()).unwrap();
+    format!("{input}.{}", b64url::encode(&sig))
+}
+
+#[test]
+fn attack_dpop_bound_refresh_without_proof() {
+    let srv = server();
+    let (verifier, challenge) = s256_pair();
+    let code = authorize_and_finish(&srv, &challenge, "alice");
+    let proof = make_dpop_proof("POST", "https://auth.example/token", 1_001, "rt-1");
+    let tok = srv
+        .exchange_token(
+            &TokenRequest {
+                grant_type: "authorization_code".into(),
+                code,
+                redirect_uri: "https://app.example/cb".into(),
+                client_id: "spa".into(),
+                code_verifier: verifier,
+                refresh_token: String::new(),
+            },
+            1_001,
+            Some(&proof),
+            "https://auth.example/token",
+        )
+        .unwrap();
+    let refresh = tok.refresh_token.expect("refresh");
+    let err = srv
+        .exchange_token(
+            &TokenRequest {
+                grant_type: "refresh_token".into(),
+                code: String::new(),
+                redirect_uri: String::new(),
+                client_id: "spa".into(),
+                code_verifier: String::new(),
+                refresh_token: refresh.clone(),
+            },
+            1_002,
+            None,
+            "https://auth.example/token",
+        )
+        .expect_err("bound refresh needs DPoP");
+    assert_eq!(err.code(), "invalid_grant");
+    // Proof with a different key must also fail, without consuming the token.
+    let other = make_dpop_proof("POST", "https://auth.example/token", 1_002, "rt-2");
+    let err = srv
+        .exchange_token(
+            &TokenRequest {
+                grant_type: "refresh_token".into(),
+                code: String::new(),
+                redirect_uri: String::new(),
+                client_id: "spa".into(),
+                code_verifier: String::new(),
+                refresh_token: refresh,
+            },
+            1_002,
+            Some(&other),
+            "https://auth.example/token",
+        )
+        .expect_err("wrong jkt");
     assert_eq!(err.code(), "invalid_grant");
 }
 

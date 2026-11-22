@@ -42,13 +42,23 @@ access tokens. M4 adds those without confidential-client auth or real login.
    (mix-up mitigation from RFC 9700 / RFC 9207).
 2. Discovery advertises `authorization_response_iss_parameter_supported: true`.
 
+### B4 — Sender-constrained refresh (DPoP)
+
+1. When `/token` issues a DPoP-bound access token (authorization-code grant),
+   the refresh-token family stores that `jkt`.
+2. Refreshing a bound family requires a DPoP proof whose thumbprint matches;
+   mismatch or missing proof → `invalid_grant` (proof checked before rotate).
+3. Unbound (Bearer) refresh families stay optional-DPoP as before.
+
 ## Consequences
 
 - Front-channel authorization queries stay short when clients use PAR.
 - Existing M1/M2/M3 demos keep working without PAR.
 - Clients can detect authorization-server mix-up via `iss`.
+- Stolen DPoP-bound refresh tokens are useless without the proof key.
 
 ## Alternatives considered
 
 - **Require PAR for all clients.** Rejected for this educational slice.
 - **JAR / request objects.** Deferred; PAR body is enough for M4.
+- **DPoP-Nonce from the AS.** Still open on the RFC 9700 checklist.

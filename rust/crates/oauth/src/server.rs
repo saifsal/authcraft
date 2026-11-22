@@ -993,6 +993,7 @@ impl AuthorizationServer {
             record.name.clone(),
             record.email.clone(),
             refresh_exp,
+            jkt.clone(),
         )?;
 
         Ok(TokenSuccess {
@@ -1016,13 +1017,28 @@ impl AuthorizationServer {
             return Err(OAuthError::InvalidRequest);
         }
 
+        // Verify DPoP against the bound jkt before rotate so a failed proof
+        // does not consume the presented refresh token.
+        let bound_jkt = {
+            let store = self.refresh.lock().map_err(|_| OAuthError::ServerError)?;
+            store
+                .get_active(&req.refresh_token)
+                .and_then(|r| r.dpop_jkt.clone())
+        };
+        let jkt = self.resolve_dpop(dpop_proof, token_htu, now)?;
+        if let Some(bound) = bound_jkt.as_deref() {
+            match jkt.as_deref() {
+                Some(presented) if presented == bound => {}
+                _ => return Err(OAuthError::InvalidGrant),
+            }
+        }
+
         let refresh_exp = now.saturating_add(self.config.refresh_token_ttl_secs);
         let mut store = self.refresh.lock().map_err(|_| OAuthError::ServerError)?;
         let (refresh_token, record) =
             store.rotate(&req.refresh_token, &req.client_id, now, refresh_exp)?;
         drop(store);
 
-        let jkt = self.resolve_dpop(dpop_proof, token_htu, now)?;
         let token_type = if jkt.is_some() { "DPoP" } else { "Bearer" };
 
         let (access_token, _) = self.mint_access(
@@ -1774,6 +1790,68 @@ mod tests {
             .unwrap();
         assert_eq!(info.sub, "alice");
         let _ = jkt;
+    }
+
+    #[test]
+    fn dpop_bound_refresh_accepts_matching_proof() {
+        use jose::signing::{self, generate_signing_key as gen};
+        let dpop_key = gen(Alg::EdDSA).unwrap();
+        let x = match &dpop_key.public {
+            PublicKey::Ed25519 { x } => b64url::encode(x),
+            _ => panic!(),
+        };
+        let header = format!(
+            r#"{{"typ":"dpop+jwt","alg":"EdDSA","jwk":{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}}}"#
+        );
+        let enc_h = b64url::encode(header.as_bytes());
+        let mk = |htm: &str, htu: &str, jti: &str| {
+            let payload = format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":1001,"jti":"{jti}"}}"#);
+            let enc_p = b64url::encode(payload.as_bytes());
+            let input = format!("{enc_h}.{enc_p}");
+            let sig = signing::sign(Alg::EdDSA, &dpop_key.pkcs8, input.as_bytes()).unwrap();
+            format!("{input}.{}", b64url::encode(&sig))
+        };
+
+        let srv = server();
+        let verifier = "a".repeat(43);
+        let mut p = pending(&srv);
+        p.code_challenge = pkce::challenge_s256(&verifier).unwrap();
+        let issued = srv
+            .finish_authorize(p, &LoginSubject::new("alice"), 1_000)
+            .unwrap();
+        let tok = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "authorization_code".into(),
+                    code: issued.code,
+                    redirect_uri: "https://app.example/cb".into(),
+                    client_id: "spa".into(),
+                    code_verifier: verifier,
+                    refresh_token: String::new(),
+                },
+                1_001,
+                Some(&mk("POST", "https://auth.example/token", "code-1")),
+                "https://auth.example/token",
+            )
+            .unwrap();
+        let rt = tok.refresh_token.unwrap();
+        let rotated = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "refresh_token".into(),
+                    code: String::new(),
+                    redirect_uri: String::new(),
+                    client_id: "spa".into(),
+                    code_verifier: String::new(),
+                    refresh_token: rt,
+                },
+                1_001,
+                Some(&mk("POST", "https://auth.example/token", "rt-ok")),
+                "https://auth.example/token",
+            )
+            .unwrap();
+        assert_eq!(rotated.token_type, "DPoP");
+        assert!(rotated.refresh_token.is_some());
     }
 
     #[test]

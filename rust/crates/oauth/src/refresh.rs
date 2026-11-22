@@ -19,6 +19,8 @@ pub struct RefreshRecord {
     pub name: Option<String>,
     pub email: Option<String>,
     pub expires_at: i64,
+    /// When set, refresh requires a matching DPoP proof (RFC 9449 / ADR 0009 B4).
+    pub dpop_jkt: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -43,6 +45,7 @@ impl RefreshStore {
     }
 
     /// Issues the first refresh token for a new family.
+    #[allow(clippy::too_many_arguments)]
     pub fn issue_new_family(
         &mut self,
         client_id: String,
@@ -51,6 +54,7 @@ impl RefreshStore {
         name: Option<String>,
         email: Option<String>,
         expires_at: i64,
+        dpop_jkt: Option<String>,
     ) -> Result<String, OAuthError> {
         let family_id = Self::random_token()?;
         let token = Self::random_token()?;
@@ -64,6 +68,7 @@ impl RefreshStore {
                 name,
                 email,
                 expires_at,
+                dpop_jkt,
             },
         );
         Ok(token)
@@ -131,10 +136,33 @@ mod tests {
                 None,
                 None,
                 10_000,
+                None,
             )
             .unwrap();
         let (second, _) = store.rotate(&first, "spa", 1_000, 10_000).unwrap();
         assert!(store.rotate(&first, "spa", 1_001, 10_000).is_err());
         assert!(store.rotate(&second, "spa", 1_002, 10_000).is_err());
+    }
+
+    #[test]
+    fn dpop_jkt_survives_rotation() {
+        let mut store = RefreshStore::new();
+        let first = store
+            .issue_new_family(
+                "spa".into(),
+                "alice".into(),
+                None,
+                None,
+                None,
+                10_000,
+                Some("jkt-abc".into()),
+            )
+            .unwrap();
+        let (second, rec) = store.rotate(&first, "spa", 1_000, 10_000).unwrap();
+        assert_eq!(rec.dpop_jkt.as_deref(), Some("jkt-abc"));
+        assert_eq!(
+            store.get_active(&second).and_then(|r| r.dpop_jkt.as_deref()),
+            Some("jkt-abc")
+        );
     }
 }

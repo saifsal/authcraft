@@ -331,6 +331,10 @@ async fn authorize_login_token_verifies() {
     assert!(location.starts_with("https://app.example/cb?"));
     let code = query_param(&location, "code").expect("code");
     assert_eq!(query_param(&location, "state").as_deref(), Some("xyz"));
+    assert_eq!(
+        query_param(&location, "iss").as_deref(),
+        Some("http://localhost:8089")
+    );
 
     let form = format!(
         "grant_type=authorization_code&code={}&redirect_uri={}&client_id=spa&code_verifier={}",

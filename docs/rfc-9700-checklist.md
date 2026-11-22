@@ -16,7 +16,7 @@ Educational mapping of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
 | Refresh / access revocation | done | ADR 0008 B2 |
 | Sender-constrained access tokens (DPoP) | partial | Optional DPoP (ADR 0009); Bearer still allowed |
 | Pushed Authorization Requests | partial | Optional PAR (ADR 0009) |
-| Mix-up mitigation (`iss` on AS responses) | open | Not yet on authorize redirects |
+| Mix-up mitigation (`iss` on AS responses) | done | RFC 9207 `iss` on authorize success redirects |
 | Confidential clients / client auth | open | Public clients only |
 | PAR required for public clients | open | `require_pushed_authorization_requests=false` |
 | DPoP nonce from AS | open | Clock-skew `iat` only |

@@ -572,6 +572,8 @@ fn redirect_with_code(success: &oauth::AuthorizationSuccess) -> Response {
         if let Some(state_param) = &success.state {
             q.append_pair("state", state_param);
         }
+        // RFC 9207 mix-up mitigation.
+        q.append_pair("iss", &success.iss);
     }
     Redirect::to(url.as_str()).into_response()
 }

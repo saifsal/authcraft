@@ -252,6 +252,33 @@ fn attack_dpop_bound_userinfo_without_proof() {
 }
 
 #[test]
+fn authorize_success_includes_iss() {
+    let srv = server();
+    let (_, challenge) = s256_pair();
+    let pending = srv
+        .begin_authorize(
+            &AuthorizeRequest {
+                response_type: "code".into(),
+                client_id: "spa".into(),
+                redirect_uri: "https://app.example/cb".into(),
+                code_challenge: challenge,
+                code_challenge_method: "S256".into(),
+                state: Some("s".into()),
+                scope: None,
+                nonce: None,
+                request_uri: None,
+            },
+            1_000,
+        )
+        .unwrap();
+    let ok = srv
+        .finish_authorize(pending, &LoginSubject::new("alice"), 1_000)
+        .unwrap();
+    assert_eq!(ok.iss, "https://auth.example");
+    assert!(!ok.code.is_empty());
+}
+
+#[test]
 fn attack_admin_without_bearer() {
     let srv = server();
     let err = srv.list_clients(None).expect_err("admin");

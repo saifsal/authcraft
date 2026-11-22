@@ -36,10 +36,17 @@ access tokens. M4 adds those without confidential-client auth or real login.
 4. If an access token has `cnf.jkt`, `/userinfo` requires a matching DPoP proof.
 5. Discovery lists `dpop_signing_alg_values_supported: ["EdDSA"]`.
 
+### B3 — Authorization response `iss` (RFC 9207)
+
+1. Successful authorize redirects include `iss` equal to `ServerConfig.issuer`
+   (mix-up mitigation from RFC 9700 / RFC 9207).
+2. Discovery advertises `authorization_response_iss_parameter_supported: true`.
+
 ## Consequences
 
 - Front-channel authorization queries stay short when clients use PAR.
 - Existing M1/M2/M3 demos keep working without PAR.
+- Clients can detect authorization-server mix-up via `iss`.
 
 ## Alternatives considered
 

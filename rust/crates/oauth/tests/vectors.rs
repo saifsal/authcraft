@@ -310,6 +310,37 @@ fn run_token_lifecycle_vector(path: &Path) {
         .expect("refresh_token on code exchange");
 
     match action {
+        "revoke_access" => {
+            assert!(srv
+                .introspect(&first.access_token, oauth::TokenTypeHint::AccessToken, now_token)
+                .unwrap()
+                .active);
+            srv.revoke(
+                &first.access_token,
+                oauth::TokenTypeHint::AccessToken,
+                client_id,
+                now_token,
+            )
+            .unwrap();
+            assert!(!srv
+                .introspect(&first.access_token, oauth::TokenTypeHint::AccessToken, now_token)
+                .unwrap()
+                .active);
+            assert_eq!(
+                srv.userinfo(&first.access_token, now_token)
+                    .unwrap_err()
+                    .code(),
+                "invalid_token"
+            );
+        }
+        "revoke_refresh" => {
+            srv.revoke(&rt, oauth::TokenTypeHint::RefreshToken, client_id, now_token)
+                .unwrap();
+            assert!(!srv
+                .introspect(&rt, oauth::TokenTypeHint::RefreshToken, now_token)
+                .unwrap()
+                .active);
+        }
         "refresh" => {
             let second = srv
                 .exchange_token(

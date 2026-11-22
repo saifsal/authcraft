@@ -15,7 +15,7 @@ use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
     AuthorizationServer, AuthorizeRequest, Client, LoginSubject, OAuthError, PendingAuthorization,
-    ServerConfig, TokenRequest,
+    ServerConfig, TokenRequest, TokenTypeHint,
 };
 use serde::Deserialize;
 
@@ -62,6 +62,8 @@ pub fn app(state: AppState) -> Router {
         .route("/login", get(login_get).post(login_post))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo))
+        .route("/revoke", post(revoke))
+        .route("/introspect", post(introspect))
         .with_state(state)
 }
 
@@ -319,5 +321,61 @@ async fn userinfo(State(state): State<AppState>, headers: HeaderMap) -> Response
             Json(serde_json::json!({ "error": err.code() })),
         )
             .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevokeForm {
+    pub token: Option<String>,
+    pub token_type_hint: Option<String>,
+    pub client_id: Option<String>,
+}
+
+async fn revoke(State(state): State<AppState>, Form(form): Form<RevokeForm>) -> Response {
+    let client_id = form.client_id.unwrap_or_default();
+    let token = form.token.unwrap_or_default();
+    let hint = TokenTypeHint::parse(form.token_type_hint.as_deref());
+    // RFC 7009: always 200 for the client when the request is authorized.
+    let _ = state
+        .server
+        .revoke(&token, hint, &client_id, now_unix());
+    StatusCode::OK.into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IntrospectForm {
+    pub token: Option<String>,
+    pub token_type_hint: Option<String>,
+}
+
+async fn introspect(State(state): State<AppState>, Form(form): Form<IntrospectForm>) -> Response {
+    let token = form.token.unwrap_or_default();
+    let hint = TokenTypeHint::parse(form.token_type_hint.as_deref());
+    match state.server.introspect(&token, hint, now_unix()) {
+        Ok(info) => {
+            let mut body = serde_json::json!({ "active": info.active });
+            if info.active {
+                if let Some(v) = info.client_id {
+                    body["client_id"] = serde_json::Value::String(v);
+                }
+                if let Some(v) = info.sub {
+                    body["sub"] = serde_json::Value::String(v);
+                }
+                if let Some(v) = info.scope {
+                    body["scope"] = serde_json::Value::String(v);
+                }
+                if let Some(v) = info.exp {
+                    body["exp"] = serde_json::json!(v);
+                }
+                if let Some(v) = info.iat {
+                    body["iat"] = serde_json::json!(v);
+                }
+                if let Some(v) = info.token_type {
+                    body["token_type"] = serde_json::Value::String(v.into());
+                }
+            }
+            Json(body).into_response()
+        }
+        Err(_) => Json(serde_json::json!({ "active": false })).into_response(),
     }
 }

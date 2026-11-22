@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod code;
+pub mod denylist;
 pub mod error;
 pub mod id_token;
 pub mod pkce;
@@ -17,6 +18,6 @@ pub use client::{Client, ClientRegistry};
 pub use error::OAuthError;
 pub use id_token::{at_hash_eddsa, scope_has_openid};
 pub use server::{
-    AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, LoginSubject,
-    PendingAuthorization, ServerConfig, TokenRequest, TokenSuccess, UserInfo,
+    AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, Introspection, LoginSubject,
+    PendingAuthorization, ServerConfig, TokenRequest, TokenSuccess, TokenTypeHint, UserInfo,
 };

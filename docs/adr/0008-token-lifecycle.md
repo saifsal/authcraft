@@ -38,7 +38,17 @@ lifecycle pieces on the same Rust crates without confidential-client auth.
 
 ### B2 — revocation and introspection
 
-*(filled in B2 commit)*
+1. **`POST /revoke` (RFC 7009):** form `token`, optional `token_type_hint`
+   (`access_token` | `refresh_token`), and `client_id` for public clients.
+   Always returns success to the HTTP layer for unknown tokens. Revoking a
+   refresh token revokes its **family**. Revoking an access token verifies it,
+   then denylists `jti` until `exp`.
+2. **`POST /introspect` (RFC 7662):** form `token` (+ optional hint / `client_id`).
+   Response includes `active` and, when active, `client_id`, `sub`, `scope`,
+   `exp`, `iat`, `token_type`. No client authentication in this educational
+   demo (document as non-production).
+3. **UserInfo** (and other access-token acceptors) reject denylisted `jti` with
+   `invalid_token` after JOSE verification.
 
 ### B3 — signing key rotation
 

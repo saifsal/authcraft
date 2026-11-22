@@ -12,6 +12,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 
 use crate::client::{Client, ClientRegistry};
 use crate::code::{AuthorizationCode, CodeStore, DEFAULT_CODE_TTL_SECS};
+use crate::denylist::JtiDenylist;
 use crate::error::OAuthError;
 use crate::id_token::{self, IdTokenClaims};
 use crate::pkce::{self, require_s256_method};
@@ -119,12 +120,57 @@ pub struct UserInfo {
     pub email: Option<String>,
 }
 
+/// RFC 7662 introspection result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Introspection {
+    pub active: bool,
+    pub client_id: Option<String>,
+    pub sub: Option<String>,
+    pub scope: Option<String>,
+    pub exp: Option<i64>,
+    pub iat: Option<i64>,
+    pub token_type: Option<&'static str>,
+}
+
+impl Introspection {
+    fn inactive() -> Self {
+        Self {
+            active: false,
+            client_id: None,
+            sub: None,
+            scope: None,
+            exp: None,
+            iat: None,
+            token_type: None,
+        }
+    }
+}
+
+/// Hint for revoke/introspect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenTypeHint {
+    AccessToken,
+    RefreshToken,
+    None,
+}
+
+impl TokenTypeHint {
+    pub fn parse(s: Option<&str>) -> Self {
+        match s {
+            Some("access_token") => Self::AccessToken,
+            Some("refresh_token") => Self::RefreshToken,
+            _ => Self::None,
+        }
+    }
+}
+
 /// In-memory authorization server.
 pub struct AuthorizationServer {
     pub config: ServerConfig,
     pub clients: ClientRegistry,
     codes: Mutex<CodeStore>,
     refresh: Mutex<RefreshStore>,
+    denylist: Mutex<JtiDenylist>,
     pkcs8: Vec<u8>,
     public: PublicKey,
 }
@@ -136,6 +182,7 @@ impl AuthorizationServer {
             clients: ClientRegistry::new(clients),
             codes: Mutex::new(CodeStore::new()),
             refresh: Mutex::new(RefreshStore::new()),
+            denylist: Mutex::new(JtiDenylist::new()),
             pkcs8: signing.pkcs8,
             public: signing.public,
         }
@@ -169,8 +216,39 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"scopes_supported":["openid","profile","email"]}}"#
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"scopes_supported":["openid","profile","email"]}}"#
         )
+    }
+
+    fn verify_access_claims(
+        &self,
+        access_token: &str,
+        now: i64,
+    ) -> Result<jose::json::Value, OAuthError> {
+        let jwks =
+            Jwks::parse(self.jwks_document().as_bytes()).map_err(|_| OAuthError::ServerError)?;
+        let verified = verify::verify(
+            access_token.as_bytes(),
+            &jwks,
+            &Policy {
+                algorithms: vec![Alg::EdDSA],
+                issuer: Some(self.config.issuer.clone()),
+                audience: Some(self.config.audience.clone()),
+                now,
+                leeway: 0,
+                typ: Some("at+jwt".into()),
+                max_token_bytes: 8192,
+            },
+        )
+        .map_err(|_| OAuthError::InvalidToken)?;
+
+        if let Some(jti) = verified.claims.get("jti").and_then(|v| v.as_str()) {
+            let mut denylist = self.denylist.lock().map_err(|_| OAuthError::ServerError)?;
+            if denylist.is_revoked(jti, now) {
+                return Err(OAuthError::InvalidToken);
+            }
+        }
+        Ok(verified.claims)
     }
 
     fn new_jti() -> Result<String, OAuthError> {
@@ -386,41 +464,127 @@ impl AuthorizationServer {
         })
     }
 
-    /// Verifies a Bearer access token and returns UserInfo claims (ADR 0006).
+    /// Verifies a Bearer access token and returns UserInfo claims (ADR 0006 / 0008).
     pub fn userinfo(&self, access_token: &str, now: i64) -> Result<UserInfo, OAuthError> {
-        let jwks = Jwks::parse(self.jwks_document().as_bytes()).map_err(|_| OAuthError::ServerError)?;
-        let verified = verify::verify(
-            access_token.as_bytes(),
-            &jwks,
-            &Policy {
-                algorithms: vec![Alg::EdDSA],
-                issuer: Some(self.config.issuer.clone()),
-                audience: Some(self.config.audience.clone()),
-                now,
-                leeway: 0,
-                typ: Some("at+jwt".into()),
-                max_token_bytes: 8192,
-            },
-        )
-        .map_err(|_| OAuthError::InvalidToken)?;
-
-        let sub = verified
-            .claims
+        let claims = self.verify_access_claims(access_token, now)?;
+        let sub = claims
             .get("sub")
             .and_then(|v| v.as_str())
             .ok_or(OAuthError::InvalidToken)?
             .to_owned();
-        let name = verified
-            .claims
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
-        let email = verified
-            .claims
+        let name = claims.get("name").and_then(|v| v.as_str()).map(str::to_owned);
+        let email = claims
             .get("email")
             .and_then(|v| v.as_str())
             .map(str::to_owned);
         Ok(UserInfo { sub, name, email })
+    }
+
+    /// RFC 7009 revoke. Unknown tokens succeed (caller maps to HTTP 200).
+    pub fn revoke(
+        &self,
+        token: &str,
+        hint: TokenTypeHint,
+        client_id: &str,
+        now: i64,
+    ) -> Result<(), OAuthError> {
+        let _ = self.clients.get(client_id)?;
+        if token.is_empty() {
+            return Ok(());
+        }
+
+        let try_refresh = matches!(hint, TokenTypeHint::RefreshToken | TokenTypeHint::None);
+        let try_access = matches!(hint, TokenTypeHint::AccessToken | TokenTypeHint::None);
+
+        if try_refresh {
+            let mut store = self.refresh.lock().map_err(|_| OAuthError::ServerError)?;
+            if let Some(rec) = store.get_active(token).cloned() {
+                if rec.client_id == client_id {
+                    store.revoke_family(&rec.family_id);
+                    return Ok(());
+                }
+            }
+        }
+
+        if try_access {
+            if let Ok(claims) = self.verify_access_claims(token, now) {
+                let client_ok = claims
+                    .get("client_id")
+                    .and_then(|v| v.as_str())
+                    == Some(client_id);
+                if client_ok {
+                    if let (Some(jti), Some(exp)) = (
+                        claims.get("jti").and_then(|v| v.as_str()),
+                        claims.get("exp").and_then(|v| v.as_i64()),
+                    ) {
+                        let mut denylist =
+                            self.denylist.lock().map_err(|_| OAuthError::ServerError)?;
+                        denylist.revoke(jti.to_owned(), exp);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// RFC 7662 introspection (no client auth in this demo).
+    pub fn introspect(
+        &self,
+        token: &str,
+        hint: TokenTypeHint,
+        now: i64,
+    ) -> Result<Introspection, OAuthError> {
+        if token.is_empty() {
+            return Ok(Introspection::inactive());
+        }
+
+        let try_refresh = matches!(hint, TokenTypeHint::RefreshToken | TokenTypeHint::None);
+        let try_access = matches!(hint, TokenTypeHint::AccessToken | TokenTypeHint::None);
+
+        if try_refresh {
+            let store = self.refresh.lock().map_err(|_| OAuthError::ServerError)?;
+            if let Some(rec) = store.get_active(token) {
+                if now < rec.expires_at {
+                    return Ok(Introspection {
+                        active: true,
+                        client_id: Some(rec.client_id.clone()),
+                        sub: Some(rec.subject.clone()),
+                        scope: rec.scope.clone(),
+                        exp: Some(rec.expires_at),
+                        iat: None,
+                        token_type: Some("refresh_token"),
+                    });
+                }
+            }
+            if matches!(hint, TokenTypeHint::RefreshToken) {
+                return Ok(Introspection::inactive());
+            }
+        }
+
+        if try_access {
+            match self.verify_access_claims(token, now) {
+                Ok(claims) => {
+                    return Ok(Introspection {
+                        active: true,
+                        client_id: claims
+                            .get("client_id")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
+                        sub: claims.get("sub").and_then(|v| v.as_str()).map(str::to_owned),
+                        scope: claims
+                            .get("scope")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
+                        exp: claims.get("exp").and_then(|v| v.as_i64()),
+                        iat: claims.get("iat").and_then(|v| v.as_i64()),
+                        token_type: Some("Bearer"),
+                    });
+                }
+                Err(_) => return Ok(Introspection::inactive()),
+            }
+        }
+
+        Ok(Introspection::inactive())
     }
 }
 
@@ -706,6 +870,94 @@ mod tests {
                     refresh_token: String::new(),
                 },
                 1_001,
+            ),
+            Err(OAuthError::InvalidGrant)
+        ));
+    }
+
+    #[test]
+    fn revoke_access_blocks_userinfo_and_introspect() {
+        let srv = server();
+        let verifier = "a".repeat(43);
+        let mut p = pending(&srv);
+        p.code_challenge = pkce::challenge_s256(&verifier).unwrap();
+        let issued = srv
+            .finish_authorize(p, &LoginSubject::new("alice"), 1_000)
+            .unwrap();
+        let tok = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "authorization_code".into(),
+                    code: issued.code,
+                    redirect_uri: "https://app.example/cb".into(),
+                    client_id: "spa".into(),
+                    code_verifier: verifier,
+                    refresh_token: String::new(),
+                },
+                1_001,
+            )
+            .unwrap();
+        assert!(srv
+            .introspect(&tok.access_token, TokenTypeHint::AccessToken, 1_001)
+            .unwrap()
+            .active);
+        srv.revoke(
+            &tok.access_token,
+            TokenTypeHint::AccessToken,
+            "spa",
+            1_001,
+        )
+        .unwrap();
+        assert!(!srv
+            .introspect(&tok.access_token, TokenTypeHint::AccessToken, 1_001)
+            .unwrap()
+            .active);
+        assert!(matches!(
+            srv.userinfo(&tok.access_token, 1_001),
+            Err(OAuthError::InvalidToken)
+        ));
+    }
+
+    #[test]
+    fn revoke_refresh_kills_family() {
+        let srv = server();
+        let verifier = "a".repeat(43);
+        let mut p = pending(&srv);
+        p.code_challenge = pkce::challenge_s256(&verifier).unwrap();
+        let issued = srv
+            .finish_authorize(p, &LoginSubject::new("alice"), 1_000)
+            .unwrap();
+        let tok = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "authorization_code".into(),
+                    code: issued.code,
+                    redirect_uri: "https://app.example/cb".into(),
+                    client_id: "spa".into(),
+                    code_verifier: verifier,
+                    refresh_token: String::new(),
+                },
+                1_001,
+            )
+            .unwrap();
+        let rt = tok.refresh_token.unwrap();
+        srv.revoke(&rt, TokenTypeHint::RefreshToken, "spa", 1_001)
+            .unwrap();
+        assert!(!srv
+            .introspect(&rt, TokenTypeHint::RefreshToken, 1_001)
+            .unwrap()
+            .active);
+        assert!(matches!(
+            srv.exchange_token(
+                &TokenRequest {
+                    grant_type: "refresh_token".into(),
+                    code: String::new(),
+                    redirect_uri: String::new(),
+                    client_id: "spa".into(),
+                    code_verifier: String::new(),
+                    refresh_token: rt,
+                },
+                1_002,
             ),
             Err(OAuthError::InvalidGrant)
         ));

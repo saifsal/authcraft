@@ -77,6 +77,8 @@ Profile: [ADR 0008](adr/0008-token-lifecycle.md). Narrative: [oauth-m3.md](oauth
 | Specification | In-scope behavior | Evidence |
 |---|---|---|
 | RFC 6749 §6 | `refresh_token` grant; rotation; reuse → `invalid_grant` | `testvectors/token/` + `oauth` tests |
+| RFC 7009 | `POST /revoke`; refresh family / access `jti` denylist | `AuthorizationServer::revoke` + vectors |
+| RFC 7662 | `POST /introspect` (`active` + claims); no client auth (demo) | `AuthorizationServer::introspect` |
 
 ## Other RFCs referenced by the project
 

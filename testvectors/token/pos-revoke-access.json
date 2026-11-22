@@ -1,0 +1,20 @@
+{
+  "id": "pos-revoke-access",
+  "source": "RFC 7009 / ADR 0008 B2",
+  "description": "Revoking an access token denylists jti; UserInfo and introspect fail.",
+  "steps": {
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "code_challenge_method": "S256",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "scope": "read",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "now_refresh": 1001,
+    "action": "revoke_access"
+  },
+  "expect": {
+    "ok": true
+  }
+}

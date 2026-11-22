@@ -89,14 +89,12 @@ Profile: [ADR 0009](adr/0009-hardening-par-dpop.md). Narrative: [oauth-m4.md](oa
 |---|---|---|
 | RFC 9126 | `POST /par`; single-use `request_uri` on `/authorize` | `testvectors/par/` + `oauth` tests |
 | RFC 9449 | Optional DPoP; `cnf.jkt`; UserInfo proof when bound | `testvectors/dpop/` + `oauth::dpop` |
+| RFC 9700 | BCP mapped to done/partial/open | [rfc-9700-checklist.md](rfc-9700-checklist.md) |
 
 ## Other RFCs referenced by the project
 
-These specifications inform later milestones or provide context:
-
-| Specification | Planned relevance |
-|---|---|
-| RFC 9700, OAuth 2.0 Security BCP | Checklist in M4 docs commit |
+Remaining gaps called out in the RFC 9700 checklist (mix-up `iss`, confidential
+clients, required PAR, real authn, etc.) are later milestones.
 
 ## Checked-in RFC vectors
 

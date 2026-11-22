@@ -262,6 +262,7 @@ Useful design notes while changing verification:
 - [`docs/adr/0009-hardening-par-dpop.md`](docs/adr/0009-hardening-par-dpop.md) — M4 PAR / DPoP profile.
 - [`docs/oauth-m3.md`](docs/oauth-m3.md) — M3 token lifecycle runbook.
 - [`docs/oauth-m4.md`](docs/oauth-m4.md) — M4 hardening runbook.
+- [`docs/rfc-9700-checklist.md`](docs/rfc-9700-checklist.md) — RFC 9700 BCP vs authcraft status.
 - [`docs/oauth-m1.md`](docs/oauth-m1.md) — how to run the M1 library and HTTP demo.
 - [`docs/oauth-m2.md`](docs/oauth-m2.md) — how to exercise OIDC discovery, ID tokens, and UserInfo.
 

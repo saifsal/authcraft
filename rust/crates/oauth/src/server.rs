@@ -21,9 +21,11 @@ use crate::par::{ParRecord, ParStore, DEFAULT_PAR_TTL_SECS};
 use crate::pkce::{self, require_s256_method};
 use crate::refresh::{RefreshStore, DEFAULT_REFRESH_TOKEN_TTL_SECS};
 use crate::token::{self, TokenClaims, DEFAULT_ACCESS_TOKEN_TTL_SECS};
+use crate::scim::{self, ScimUser};
 use crate::totp;
 use crate::users::{AuthnError, UserRecord, UserStore};
 use crate::webauthn_mfa::WebauthnMfa;
+use uuid::Uuid;
 use webauthn_rs::prelude::{
     CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential,
     RequestChallengeResponse,
@@ -371,6 +373,98 @@ impl AuthorizationServer {
                 webauthn_enrolled: u.webauthn_enrolled(),
             })
             .collect())
+    }
+
+    /// SCIM create User (admin).
+    pub fn scim_create_user(
+        &self,
+        admin_token: Option<&str>,
+        body: &[u8],
+    ) -> Result<ScimUser, AdminError> {
+        self.require_admin(admin_token)?;
+        let input = scim::parse_user_json(body)?;
+        let record = scim::build_user_record(&input, None)?;
+        let mut users = self.users.lock().expect("users lock");
+        if users.get(&input.user_name).is_some() {
+            return Err(AdminError::Conflict);
+        }
+        let scim_user = ScimUser::from_record(&input.user_name, &record);
+        users.insert(input.user_name, record);
+        Ok(scim_user)
+    }
+
+    pub fn scim_get_user(
+        &self,
+        admin_token: Option<&str>,
+        id: &str,
+    ) -> Result<ScimUser, AdminError> {
+        self.require_admin(admin_token)?;
+        let uuid = Uuid::parse_str(id).map_err(|_| AdminError::NotFound)?;
+        let users = self.users.lock().expect("users lock");
+        let (name, record) = users.get_by_handle(uuid).ok_or(AdminError::NotFound)?;
+        Ok(ScimUser::from_record(name, record))
+    }
+
+    pub fn scim_list_users(
+        &self,
+        admin_token: Option<&str>,
+        filter: Option<&str>,
+    ) -> Result<Vec<ScimUser>, AdminError> {
+        self.require_admin(admin_token)?;
+        let only = scim::parse_username_filter(filter)?;
+        let users = self.users.lock().expect("users lock");
+        let mut out = Vec::new();
+        for (name, record) in users.iter() {
+            if let Some(ref want) = only {
+                if name != want {
+                    continue;
+                }
+            }
+            out.push(ScimUser::from_record(name, record));
+        }
+        Ok(out)
+    }
+
+    pub fn scim_replace_user(
+        &self,
+        admin_token: Option<&str>,
+        id: &str,
+        body: &[u8],
+    ) -> Result<ScimUser, AdminError> {
+        self.require_admin(admin_token)?;
+        let uuid = Uuid::parse_str(id).map_err(|_| AdminError::NotFound)?;
+        let input = scim::parse_user_json(body)?;
+        let mut users = self.users.lock().expect("users lock");
+        let (old_name, existing) = {
+            let (n, r) = users.get_by_handle(uuid).ok_or(AdminError::NotFound)?;
+            (n.to_owned(), r.clone())
+        };
+        if input.user_name != old_name && users.get(&input.user_name).is_some() {
+            return Err(AdminError::Conflict);
+        }
+        let record = scim::build_user_record(&input, Some(&existing))?;
+        let scim_user = ScimUser::from_record(&input.user_name, &record);
+        if input.user_name != old_name {
+            users.remove(&old_name);
+        }
+        users.insert(input.user_name, record);
+        Ok(scim_user)
+    }
+
+    pub fn scim_delete_user(
+        &self,
+        admin_token: Option<&str>,
+        id: &str,
+    ) -> Result<(), AdminError> {
+        self.require_admin(admin_token)?;
+        let uuid = Uuid::parse_str(id).map_err(|_| AdminError::NotFound)?;
+        let mut users = self.users.lock().expect("users lock");
+        let name = users
+            .username_for_handle(uuid)
+            .ok_or(AdminError::NotFound)?
+            .to_owned();
+        users.remove(&name);
+        Ok(())
     }
 
     /// Insert or replace a user account (ADR 0010).

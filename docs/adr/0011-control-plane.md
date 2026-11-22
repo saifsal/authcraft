@@ -35,14 +35,23 @@ in-process Rust control plane (deferring a separate Go service).
 4. Discovery advertises `registration_endpoint` and
    `token_endpoint_auth_methods_supported: ["none"]`.
 
-### B3 — SCIM 2.0 Users (pending)
+### B3 — SCIM 2.0 Users
+
+1. Base path `/scim/v2` with the same admin bearer as `/admin`.
+2. `Users` only: `POST`, `GET /Users`, `GET /Users/{id}`, `PUT`, `DELETE`.
+3. Attributes: `id` (= `user_handle` UUID), `userName`, `displayName` /
+   `name.formatted`, `emails`, `active`. Write-only `password` (Argon2id).
+4. Optional list filter: `userName eq "..."`.
+5. Errors use SCIM Error schema (`status`, `detail`).
 
 ## Consequences
 
-- Demo `spa` and `alice` remain seed data; admin can add more at runtime.
+- Demo `spa` and `alice` remain seed data; admin/DCR/SCIM can add more at runtime.
 - Wrong admin token → HTTP 401 `unauthorized`.
+- Go control plane remains a later architectural split.
 
 ## Alternatives considered
 
 - **Go control plane first.** Deferred; keep one process with M1–M5.
 - **OAuth-protected admin.** Rejected for this slice (circular bootstrap).
+- **SCIM Groups.** Deferred.

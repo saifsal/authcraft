@@ -88,7 +88,115 @@ pub fn app(state: AppState) -> Router {
         .route("/admin/clients", get(admin_list_clients).post(admin_create_client))
         .route("/admin/clients/{client_id}", axum::routing::delete(admin_delete_client))
         .route("/admin/users", get(admin_list_users))
+        .route("/scim/v2/Users", get(scim_list_users).post(scim_create_user))
+        .route(
+            "/scim/v2/Users/{id}",
+            get(scim_get_user)
+                .put(scim_replace_user)
+                .delete(scim_delete_user),
+        )
         .with_state(state)
+}
+
+fn scim_error(status: StatusCode, detail: &str) -> Response {
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/scim+json")],
+        oauth::scim::error_json(status.as_u16(), detail),
+    )
+        .into_response()
+}
+
+fn scim_ok(status: StatusCode, body: String) -> Response {
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/scim+json")],
+        body,
+    )
+        .into_response()
+}
+
+async fn scim_create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    match state
+        .server
+        .scim_create_user(admin_bearer(&headers), &body)
+    {
+        Ok(user) => scim_ok(StatusCode::CREATED, user.to_json()),
+        Err(oauth::AdminError::Unauthorized) => scim_error(StatusCode::UNAUTHORIZED, "unauthorized"),
+        Err(oauth::AdminError::Conflict) => scim_error(StatusCode::CONFLICT, "userName exists"),
+        Err(oauth::AdminError::InvalidRequest) => {
+            scim_error(StatusCode::BAD_REQUEST, "invalid user")
+        }
+        Err(err) => scim_error(StatusCode::BAD_REQUEST, err.code()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScimListQuery {
+    pub filter: Option<String>,
+}
+
+async fn scim_list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ScimListQuery>,
+) -> Response {
+    match state
+        .server
+        .scim_list_users(admin_bearer(&headers), q.filter.as_deref())
+    {
+        Ok(users) => scim_ok(StatusCode::OK, oauth::scim::list_response_json(&users)),
+        Err(oauth::AdminError::Unauthorized) => scim_error(StatusCode::UNAUTHORIZED, "unauthorized"),
+        Err(err) => scim_error(StatusCode::BAD_REQUEST, err.code()),
+    }
+}
+
+async fn scim_get_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    match state.server.scim_get_user(admin_bearer(&headers), &id) {
+        Ok(user) => scim_ok(StatusCode::OK, user.to_json()),
+        Err(oauth::AdminError::Unauthorized) => scim_error(StatusCode::UNAUTHORIZED, "unauthorized"),
+        Err(oauth::AdminError::NotFound) => scim_error(StatusCode::NOT_FOUND, "user not found"),
+        Err(err) => scim_error(StatusCode::BAD_REQUEST, err.code()),
+    }
+}
+
+async fn scim_replace_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    match state
+        .server
+        .scim_replace_user(admin_bearer(&headers), &id, &body)
+    {
+        Ok(user) => scim_ok(StatusCode::OK, user.to_json()),
+        Err(oauth::AdminError::Unauthorized) => scim_error(StatusCode::UNAUTHORIZED, "unauthorized"),
+        Err(oauth::AdminError::NotFound) => scim_error(StatusCode::NOT_FOUND, "user not found"),
+        Err(oauth::AdminError::Conflict) => scim_error(StatusCode::CONFLICT, "userName exists"),
+        Err(err) => scim_error(StatusCode::BAD_REQUEST, err.code()),
+    }
+}
+
+async fn scim_delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    match state.server.scim_delete_user(admin_bearer(&headers), &id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(oauth::AdminError::Unauthorized) => scim_error(StatusCode::UNAUTHORIZED, "unauthorized"),
+        Err(oauth::AdminError::NotFound) => scim_error(StatusCode::NOT_FOUND, "user not found"),
+        Err(err) => scim_error(StatusCode::BAD_REQUEST, err.code()),
+    }
 }
 
 fn admin_bearer(headers: &HeaderMap) -> Option<&str> {

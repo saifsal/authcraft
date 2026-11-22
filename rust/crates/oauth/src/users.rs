@@ -117,6 +117,24 @@ impl UserStore {
         self.users.is_empty()
     }
 
+    pub fn remove(&mut self, username: &str) -> Option<UserRecord> {
+        self.users.remove(username)
+    }
+
+    pub fn username_for_handle(&self, id: Uuid) -> Option<&str> {
+        self.users
+            .iter()
+            .find(|(_, u)| u.user_handle == id)
+            .map(|(name, _)| name.as_str())
+    }
+
+    pub fn get_by_handle(&self, id: Uuid) -> Option<(&str, &UserRecord)> {
+        self.users
+            .iter()
+            .find(|(_, u)| u.user_handle == id)
+            .map(|(name, u)| (name.as_str(), u))
+    }
+
     /// Seeds demo user `alice` with [`DEMO_ALICE_PASSWORD`].
     pub fn seed_demo_alice(&mut self) {
         let hash = hash_password(DEMO_ALICE_PASSWORD).expect("hash demo password");

@@ -273,6 +273,67 @@ fn now_unix() -> i64 {
 }
 
 #[tokio::test]
+async fn scim_create_user_can_login() {
+    use oauth::DEMO_ADMIN_TOKEN;
+
+    let state = AppState::demo();
+    let app = app(state.clone());
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/scim/v2/Users")
+                .header(header::AUTHORIZATION, format!("Bearer {DEMO_ADMIN_TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/scim+json")
+                .body(Body::from(
+                    r#"{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"bob","displayName":"Bob","password":"bob-pass","emails":[{"value":"bob@example.com"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let body = body_string(res).await;
+    assert!(body.contains("\"userName\":\"bob\""));
+
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let challenge = pkce::challenge_s256(verifier).unwrap();
+    let authorize_uri = format!(
+        "/authorize?response_type=code&client_id=spa&redirect_uri={}&code_challenge={}&code_challenge_method=S256",
+        urlencoding_encode("https://app.example/cb"),
+        urlencoding_encode(&challenge),
+    );
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&authorize_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = cookie_from(&res);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("username=bob&password=bob-pass"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let location = res.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+    assert!(query_param(location, "code").is_some());
+}
+
+#[tokio::test]
 async fn dynamic_client_registration_then_token() {
     let state = AppState::demo();
     let app = app(state.clone());

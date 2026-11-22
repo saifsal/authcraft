@@ -1,6 +1,6 @@
 # M6 control plane
 
-**Status: in progress** (B1 admin + B2 DCR landed; SCIM next).
+**Status: complete** for the admin + DCR + SCIM Users slice.
 Profile: [ADR 0011](adr/0011-control-plane.md).
 
 ## B1 — Admin API
@@ -18,10 +18,14 @@ Vectors: `testvectors/admin/`.
 `POST /register` (public clients only). Discovery: `registration_endpoint`.
 Vectors: `testvectors/dcr/`.
 
+## B3 — SCIM 2.0 Users
+
+Admin bearer on `/scim/v2/Users` (create/list/get/replace/delete).
+Password is write-only on create/replace (Argon2id).
+
 ## Run
 
 ```bash
 cargo test -p oauth --test vectors
 cargo test -p oauth-http
 ```
-

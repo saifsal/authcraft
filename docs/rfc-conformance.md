@@ -101,6 +101,16 @@ Profile: [ADR 0010](adr/0010-authentication.md). Narrative: [oauth-m5.md](oauth-
 | RFC 6238 TOTP | Enroll + required MFA when enrolled; ±1 step | `testvectors/authn/` + `oauth::totp` |
 | WebAuthn (L2) | Security-key second factor; SoftPasskey tests | `oauth::webauthn_mfa` + oauth-http e2e |
 
+## M6 control plane
+
+Profile: [ADR 0011](adr/0011-control-plane.md). Narrative: [oauth-m6.md](oauth-m6.md).
+
+| Specification | In-scope behavior | Evidence |
+|---|---|---|
+| Admin API | Bearer-gated `/admin/clients` and `/admin/users` | `testvectors/admin/` |
+| RFC 7591 | Public-client `POST /register` | `testvectors/dcr/` |
+| RFC 7643/7644 SCIM | Users CRUD subset | `oauth::scim` + oauth-http e2e |
+
 ## Other RFCs referenced by the project
 
 Remaining gaps called out in the RFC 9700 checklist (mix-up `iss`, confidential

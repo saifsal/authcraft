@@ -14,6 +14,7 @@ pub mod keyring;
 pub mod par;
 pub mod pkce;
 pub mod refresh;
+pub mod scim;
 pub mod server;
 pub mod token;
 pub mod totp;

@@ -282,7 +282,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 | **M3** | Token lifecycle: refresh rotation, introspection, revocation, key rotation | Complete for B1–B3: rotating refresh, revoke/introspect, signing-key grace JWKS. See [ADR 0008](docs/adr/0008-token-lifecycle.md) and [docs/oauth-m3.md](docs/oauth-m3.md). |
 | **M4** | Hardening: PAR, DPoP, RFC 9700 checklist | Complete for this slice: optional PAR + DPoP, plus [RFC 9700 checklist](docs/rfc-9700-checklist.md). See [ADR 0009](docs/adr/0009-hardening-par-dpop.md) and [docs/oauth-m4.md](docs/oauth-m4.md). |
 | **M5** | Authentication: Argon2id passwords, TOTP, WebAuthn | Complete for this slice: Argon2id passwords, TOTP and WebAuthn second factors ([ADR 0010](docs/adr/0010-authentication.md), [docs/oauth-m5.md](docs/oauth-m5.md)). |
-| **M6** | Control plane: admin API, dynamic client registration, SCIM 2.0 | In progress. B1 admin + B2 DCR ([ADR 0011](docs/adr/0011-control-plane.md), [docs/oauth-m6.md](docs/oauth-m6.md)). SCIM next. |
+| **M6** | Control plane: admin API, dynamic client registration, SCIM 2.0 | Complete for this slice: admin API, RFC 7591 DCR, SCIM Users ([ADR 0011](docs/adr/0011-control-plane.md), [docs/oauth-m6.md](docs/oauth-m6.md)). |
 | M7 | Federation: OIDC relying-party connector, LDAP gateway | Planned |
 | M8 | Assurance: OpenID conformance suite, attack harness, fuzzing in CI | Planned |
 

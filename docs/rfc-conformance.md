@@ -81,13 +81,21 @@ Profile: [ADR 0008](adr/0008-token-lifecycle.md). Narrative: [oauth-m3.md](oauth
 | RFC 7662 | `POST /introspect` (`active` + claims); no client auth (demo) | `AuthorizationServer::introspect` |
 | JOSE / JWKS | Multi-key JWKS after `rotate_signing_key`; grace prune | `oauth::keyring` + server tests |
 
+## M4 hardening
+
+Profile: [ADR 0009](adr/0009-hardening-par-dpop.md). Narrative: [oauth-m4.md](oauth-m4.md).
+
+| Specification | In-scope behavior | Evidence |
+|---|---|---|
+| RFC 9126 | `POST /par`; single-use `request_uri` on `/authorize` | `testvectors/par/` + `oauth` tests |
+
 ## Other RFCs referenced by the project
 
 These specifications inform later milestones or provide context:
 
 | Specification | Planned relevance |
 |---|---|
-| RFC 9700, OAuth 2.0 Security BCP | Later OAuth hardening milestone (M4) |
+| RFC 9700, OAuth 2.0 Security BCP | Checklist in M4 docs commit |
 
 ## Checked-in RFC vectors
 

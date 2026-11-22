@@ -1,4 +1,4 @@
-//! Authorization-code + PKCE + OIDC + refresh orchestration (ADR 0005–0008).
+//! Authorization-code + PKCE + OIDC + refresh + PAR (ADR 0005–0009).
 
 use std::sync::Mutex;
 
@@ -16,6 +16,7 @@ use crate::denylist::JtiDenylist;
 use crate::error::OAuthError;
 use crate::id_token::{self, IdTokenClaims};
 use crate::keyring::{Keyring, DEFAULT_VERIFY_GRACE_SECS};
+use crate::par::{ParRecord, ParStore, DEFAULT_PAR_TTL_SECS};
 use crate::pkce::{self, require_s256_method};
 use crate::refresh::{RefreshStore, DEFAULT_REFRESH_TOKEN_TTL_SECS};
 use crate::token::{self, TokenClaims, DEFAULT_ACCESS_TOKEN_TTL_SECS};
@@ -29,6 +30,7 @@ pub struct ServerConfig {
     pub access_token_ttl_secs: i64,
     pub refresh_token_ttl_secs: i64,
     pub verify_grace_secs: i64,
+    pub par_ttl_secs: i64,
 }
 
 impl ServerConfig {
@@ -40,8 +42,16 @@ impl ServerConfig {
             access_token_ttl_secs: DEFAULT_ACCESS_TOKEN_TTL_SECS,
             refresh_token_ttl_secs: DEFAULT_REFRESH_TOKEN_TTL_SECS,
             verify_grace_secs: DEFAULT_VERIFY_GRACE_SECS,
+            par_ttl_secs: DEFAULT_PAR_TTL_SECS,
         }
     }
+}
+
+/// Successful PAR response fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParSuccess {
+    pub request_uri: String,
+    pub expires_in: i64,
 }
 
 /// Validated authorize request awaiting stub login completion.
@@ -102,6 +112,8 @@ pub struct AuthorizeRequest {
     pub state: Option<String>,
     pub scope: Option<String>,
     pub nonce: Option<String>,
+    /// When set, other authorize fields are loaded from the PAR store (ADR 0009).
+    pub request_uri: Option<String>,
 }
 
 /// Token form parameters.
@@ -175,6 +187,7 @@ pub struct AuthorizationServer {
     refresh: Mutex<RefreshStore>,
     denylist: Mutex<JtiDenylist>,
     keys: Mutex<Keyring>,
+    par: Mutex<ParStore>,
 }
 
 impl AuthorizationServer {
@@ -187,6 +200,7 @@ impl AuthorizationServer {
             refresh: Mutex::new(RefreshStore::new()),
             denylist: Mutex::new(JtiDenylist::new()),
             keys: Mutex::new(Keyring::from_signing_key(signing, grace)),
+            par: Mutex::new(ParStore::new()),
         }
     }
 
@@ -221,7 +235,7 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"scopes_supported":["openid","profile","email"]}}"#
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":false,"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"scopes_supported":["openid","profile","email"]}}"#
         )
     }
 
@@ -296,8 +310,71 @@ impl AuthorizationServer {
         Ok((access_token, exp))
     }
 
+    /// Pushes authorize parameters and returns a one-time `request_uri` (ADR 0009).
+    pub fn push_authorization(
+        &self,
+        req: &AuthorizeRequest,
+        now: i64,
+    ) -> Result<ParSuccess, OAuthError> {
+        if req.request_uri.is_some() {
+            return Err(OAuthError::InvalidRequest);
+        }
+        let pending = self.validate_authorize_params(req)?;
+        let record = ParRecord {
+            client_id: req.client_id.clone(),
+            redirect_uri: req.redirect_uri.clone(),
+            code_challenge: req.code_challenge.clone(),
+            code_challenge_method: req.code_challenge_method.clone(),
+            response_type: req.response_type.clone(),
+            state: pending.state,
+            scope: pending.scope,
+            nonce: pending.nonce,
+            expires_at: now.saturating_add(self.config.par_ttl_secs),
+        };
+        let mut store = self.par.lock().map_err(|_| OAuthError::ServerError)?;
+        let request_uri = store.issue(record)?;
+        Ok(ParSuccess {
+            request_uri,
+            expires_in: self.config.par_ttl_secs,
+        })
+    }
+
     /// Validates authorize parameters. Does not issue a code until [`finish_authorize`].
-    pub fn begin_authorize(&self, req: &AuthorizeRequest) -> Result<PendingAuthorization, OAuthError> {
+    pub fn begin_authorize(
+        &self,
+        req: &AuthorizeRequest,
+        now: i64,
+    ) -> Result<PendingAuthorization, OAuthError> {
+        if let Some(uri) = req.request_uri.as_deref() {
+            if uri.is_empty() {
+                return Err(OAuthError::InvalidRequest);
+            }
+            let mut store = self.par.lock().map_err(|_| OAuthError::ServerError)?;
+            let record = store.redeem(uri, now)?;
+            drop(store);
+            if record.client_id != req.client_id {
+                return Err(OAuthError::InvalidRequest);
+            }
+            let expanded = AuthorizeRequest {
+                response_type: record.response_type,
+                client_id: record.client_id,
+                redirect_uri: record.redirect_uri,
+                code_challenge: record.code_challenge,
+                code_challenge_method: record.code_challenge_method,
+                state: record.state,
+                scope: record.scope,
+                nonce: record.nonce,
+                request_uri: None,
+            };
+            return self.validate_authorize_params(&expanded);
+        }
+        self.validate_authorize_params(req)
+    }
+
+    fn validate_authorize_params(
+        &self,
+        req: &AuthorizeRequest,
+    ) -> Result<PendingAuthorization, OAuthError> {
         if req.response_type != "code" {
             return Err(OAuthError::InvalidRequest);
         }
@@ -624,7 +701,8 @@ mod tests {
             state: Some("xyz".into()),
             scope: Some("read".into()),
             nonce: None,
-        })
+                    request_uri: None,
+        }, 1_000)
         .unwrap()
     }
 
@@ -690,7 +768,8 @@ mod tests {
                 state: None,
                 scope: Some("openid profile".into()),
                 nonce: Some("n-0S6_WzA2Mj".into()),
-            })
+                        request_uri: None,
+        }, 1_000)
             .unwrap();
         let issued = srv
             .finish_authorize(
@@ -762,7 +841,8 @@ mod tests {
             state: None,
             scope: Some("openid".into()),
             nonce: None,
-        });
+                    request_uri: None,
+        }, 1_000);
         assert_eq!(err, Err(OAuthError::InvalidRequest));
     }
 
@@ -847,17 +927,78 @@ mod tests {
     #[test]
     fn plain_pkce_rejected() {
         let srv = server();
-        let err = srv.begin_authorize(&AuthorizeRequest {
-            response_type: "code".into(),
-            client_id: "spa".into(),
-            redirect_uri: "https://app.example/cb".into(),
-            code_challenge: "x".into(),
-            code_challenge_method: "plain".into(),
-            state: None,
-            scope: None,
-            nonce: None,
-        });
+        let err = srv.begin_authorize(
+            &AuthorizeRequest {
+                response_type: "code".into(),
+                client_id: "spa".into(),
+                redirect_uri: "https://app.example/cb".into(),
+                code_challenge: "x".into(),
+                code_challenge_method: "plain".into(),
+                state: None,
+                scope: None,
+                nonce: None,
+                request_uri: None,
+            },
+            1_000,
+        );
         assert_eq!(err, Err(OAuthError::InvalidRequest));
+    }
+
+    #[test]
+    fn par_then_authorize_and_replay_fails() {
+        let srv = server();
+        let challenge = pkce::challenge_s256(&"a".repeat(43)).unwrap();
+        let pushed = srv
+            .push_authorization(
+                &AuthorizeRequest {
+                    response_type: "code".into(),
+                    client_id: "spa".into(),
+                    redirect_uri: "https://app.example/cb".into(),
+                    code_challenge: challenge,
+                    code_challenge_method: "S256".into(),
+                    state: Some("s".into()),
+                    scope: Some("read".into()),
+                    nonce: None,
+                    request_uri: None,
+                },
+                1_000,
+            )
+            .unwrap();
+        assert!(pushed.request_uri.starts_with("urn:ietf:params:oauth:request_uri:"));
+        let pending = srv
+            .begin_authorize(
+                &AuthorizeRequest {
+                    response_type: String::new(),
+                    client_id: "spa".into(),
+                    redirect_uri: String::new(),
+                    code_challenge: String::new(),
+                    code_challenge_method: String::new(),
+                    state: None,
+                    scope: None,
+                    nonce: None,
+                    request_uri: Some(pushed.request_uri.clone()),
+                },
+                1_001,
+            )
+            .unwrap();
+        assert_eq!(pending.state.as_deref(), Some("s"));
+        assert!(matches!(
+            srv.begin_authorize(
+                &AuthorizeRequest {
+                    response_type: String::new(),
+                    client_id: "spa".into(),
+                    redirect_uri: String::new(),
+                    code_challenge: String::new(),
+                    code_challenge_method: String::new(),
+                    state: None,
+                    scope: None,
+                    nonce: None,
+                    request_uri: Some(pushed.request_uri),
+                },
+                1_002,
+            ),
+            Err(OAuthError::InvalidRequest)
+        ));
     }
 
     #[test]
@@ -1023,7 +1164,8 @@ mod tests {
                 state: None,
                 scope: Some("read".into()),
                 nonce: None,
-            })
+                        request_uri: None,
+        }, 1_000)
             .unwrap();
         p3.code_challenge = pkce::challenge_s256(&v).unwrap();
         let issued3 = short

@@ -26,6 +26,10 @@ fn token_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/token")
 }
 
+fn par_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/par")
+}
+
 fn string<'a>(v: &'a Value, name: &str) -> &'a str {
     v.get(name)
         .and_then(Value::as_str)
@@ -97,7 +101,8 @@ fn run_code_flow_vector(path: &Path) {
         state: optional_string(steps, "state").map(str::to_owned),
         scope: optional_string(steps, "scope").map(str::to_owned),
         nonce: optional_string(steps, "nonce").map(str::to_owned),
-    });
+                request_uri: None,
+        }, now_auth);
 
     let phase = optional_string(expect, "phase").unwrap_or(if ok { "token" } else { "authorize" });
 
@@ -286,7 +291,8 @@ fn run_token_lifecycle_vector(path: &Path) {
             state: None,
             scope: optional_string(steps, "scope").map(str::to_owned),
             nonce: None,
-        })
+                    request_uri: None,
+        }, now_auth)
         .unwrap_or_else(|e| panic!("{case}: authorize: {e}"));
     let issued = srv
         .finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
@@ -427,5 +433,122 @@ fn token_lifecycle_vectors() {
     assert!(!files.is_empty(), "no token vectors");
     for f in files {
         run_token_lifecycle_vector(&f);
+    }
+}
+
+fn run_par_vector(path: &Path) {
+    let case = path.display().to_string();
+    let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(string(&root, "id"), path.file_stem().unwrap().to_str().unwrap());
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+    let action = string(steps, "action");
+    let client_id = string(steps, "client_id");
+    let redirect_uri = string(steps, "redirect_uri");
+    let verifier = string(steps, "code_verifier");
+    let challenge = pkce::challenge_s256(verifier).unwrap();
+    let now_par = integer(steps, "now_par");
+    let now_auth = integer(steps, "now_authorize");
+    let now_token = integer(steps, "now_token");
+
+    let srv = make_server();
+    let pushed = srv
+        .push_authorization(
+            &AuthorizeRequest {
+                response_type: "code".into(),
+                client_id: client_id.into(),
+                redirect_uri: redirect_uri.into(),
+                code_challenge: challenge,
+                code_challenge_method: string(steps, "code_challenge_method").into(),
+                state: None,
+                scope: optional_string(steps, "scope").map(str::to_owned),
+                nonce: None,
+                request_uri: None,
+            },
+            now_par,
+        )
+        .unwrap_or_else(|e| panic!("{case}: par: {e}"));
+
+    match action {
+        "par_exchange" => {
+            let pending = srv
+                .begin_authorize(
+                    &AuthorizeRequest {
+                        response_type: String::new(),
+                        client_id: client_id.into(),
+                        redirect_uri: String::new(),
+                        code_challenge: String::new(),
+                        code_challenge_method: String::new(),
+                        state: None,
+                        scope: None,
+                        nonce: None,
+                        request_uri: Some(pushed.request_uri),
+                    },
+                    now_auth,
+                )
+                .unwrap();
+            let issued = srv
+                .finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
+                .unwrap();
+            let tok = srv
+                .exchange_token(
+                    &TokenRequest {
+                        grant_type: "authorization_code".into(),
+                        code: issued.code,
+                        redirect_uri: redirect_uri.into(),
+                        client_id: client_id.into(),
+                        code_verifier: verifier.into(),
+                        refresh_token: String::new(),
+                    },
+                    now_token,
+                )
+                .unwrap();
+            assert!(!tok.access_token.is_empty());
+        }
+        "par_replay" => {
+            srv.begin_authorize(
+                &AuthorizeRequest {
+                    response_type: String::new(),
+                    client_id: client_id.into(),
+                    redirect_uri: String::new(),
+                    code_challenge: String::new(),
+                    code_challenge_method: String::new(),
+                    state: None,
+                    scope: None,
+                    nonce: None,
+                    request_uri: Some(pushed.request_uri.clone()),
+                },
+                now_auth,
+            )
+            .unwrap();
+            let err = srv
+                .begin_authorize(
+                    &AuthorizeRequest {
+                        response_type: String::new(),
+                        client_id: client_id.into(),
+                        redirect_uri: String::new(),
+                        code_challenge: String::new(),
+                        code_challenge_method: String::new(),
+                        state: None,
+                        scope: None,
+                        nonce: None,
+                        request_uri: Some(pushed.request_uri),
+                    },
+                    now_auth + 1,
+                )
+                .expect_err("replay");
+            assert_eq!(err.code(), string(expect, "error"), "{case}");
+        }
+        other => panic!("{case}: unknown action {other}"),
+    }
+}
+
+#[test]
+fn par_shared_vectors() {
+    let files = load_json_vectors(&par_vectors_dir());
+    assert!(!files.is_empty(), "no par vectors");
+    for f in files {
+        run_par_vector(&f);
     }
 }

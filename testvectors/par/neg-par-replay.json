@@ -1,0 +1,22 @@
+{
+  "id": "neg-par-replay",
+  "source": "RFC 9126 / ADR 0009",
+  "description": "Replaying request_uri is invalid_request.",
+  "steps": {
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "code_challenge_method": "S256",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "scope": "read",
+    "now_par": 1000,
+    "now_authorize": 1001,
+    "now_token": 1002,
+    "action": "par_replay"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request",
+    "phase": "authorize"
+  }
+}

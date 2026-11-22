@@ -59,6 +59,7 @@ pub fn app(state: AppState) -> Router {
             get(openid_configuration),
         )
         .route("/authorize", get(authorize))
+        .route("/par", post(par))
         .route("/login", get(login_get).post(login_post))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo))
@@ -91,6 +92,7 @@ pub struct AuthorizeQuery {
     pub state: Option<String>,
     pub scope: Option<String>,
     pub nonce: Option<String>,
+    pub request_uri: Option<String>,
 }
 
 async fn authorize(
@@ -106,9 +108,10 @@ async fn authorize(
         state: q.state,
         scope: q.scope,
         nonce: q.nonce,
+        request_uri: q.request_uri,
     };
 
-    match state.server.begin_authorize(&req) {
+    match state.server.begin_authorize(&req, now_unix()) {
         Ok(pending) => {
             let ticket = random_ticket();
             state
@@ -131,6 +134,44 @@ async fn authorize(
             Json(serde_json::json!({
                 "error": err.code(),
             })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ParForm {
+    pub response_type: Option<String>,
+    pub client_id: Option<String>,
+    pub redirect_uri: Option<String>,
+    pub code_challenge: Option<String>,
+    pub code_challenge_method: Option<String>,
+    pub state: Option<String>,
+    pub scope: Option<String>,
+    pub nonce: Option<String>,
+}
+
+async fn par(State(state): State<AppState>, Form(form): Form<ParForm>) -> Response {
+    let req = AuthorizeRequest {
+        response_type: form.response_type.unwrap_or_default(),
+        client_id: form.client_id.unwrap_or_default(),
+        redirect_uri: form.redirect_uri.unwrap_or_default(),
+        code_challenge: form.code_challenge.unwrap_or_default(),
+        code_challenge_method: form.code_challenge_method.unwrap_or_default(),
+        state: form.state,
+        scope: form.scope,
+        nonce: form.nonce,
+        request_uri: None,
+    };
+    match state.server.push_authorization(&req, now_unix()) {
+        Ok(ok) => Json(serde_json::json!({
+            "request_uri": ok.request_uri,
+            "expires_in": ok.expires_in,
+        }))
+        .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
         )
             .into_response(),
     }

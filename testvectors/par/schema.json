@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/authcraft/testvectors/par/schema.json",
+  "title": "authcraft PAR M4 test vector",
+  "type": "object",
+  "required": ["id", "source", "steps", "expect"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "source": { "type": "string" },
+    "description": { "type": "string" },
+    "steps": { "type": "object", "additionalProperties": true },
+    "expect": { "type": "object", "additionalProperties": true }
+  }
+}

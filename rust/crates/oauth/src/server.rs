@@ -41,6 +41,8 @@ pub struct ServerConfig {
     pub refresh_token_ttl_secs: i64,
     pub verify_grace_secs: i64,
     pub par_ttl_secs: i64,
+    /// When true, `/authorize` requires `request_uri` from PAR (RFC 9126).
+    pub require_par: bool,
     /// WebAuthn RP ID (e.g. `localhost`).
     pub rp_id: String,
     /// WebAuthn RP origin (e.g. `http://localhost:8089`).
@@ -68,6 +70,7 @@ impl ServerConfig {
             refresh_token_ttl_secs: DEFAULT_REFRESH_TOKEN_TTL_SECS,
             verify_grace_secs: DEFAULT_VERIFY_GRACE_SECS,
             par_ttl_secs: DEFAULT_PAR_TTL_SECS,
+            require_par: false,
             rp_id,
             rp_origin,
             admin_token: String::new(),
@@ -681,7 +684,12 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":false,"authorization_response_iss_parameter_supported":true,"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"scopes_supported":["openid","profile","email"]}}"#
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"scopes_supported":["openid","profile","email"]}}"#,
+            require_par = if self.config.require_par {
+                "true"
+            } else {
+                "false"
+            },
         )
     }
 
@@ -865,6 +873,9 @@ impl AuthorizationServer {
                 request_uri: None,
             };
             return self.validate_authorize_params(&expanded);
+        }
+        if self.config.require_par {
+            return Err(OAuthError::InvalidRequest);
         }
         self.validate_authorize_params(req)
     }
@@ -1567,6 +1578,71 @@ mod tests {
             ),
             Err(OAuthError::InvalidRequest)
         ));
+    }
+
+    #[test]
+    fn require_par_rejects_front_channel_params() {
+        let key = generate_signing_key(Alg::EdDSA).unwrap();
+        let mut cfg = ServerConfig::new("https://auth.example", "api");
+        cfg.require_par = true;
+        let srv = AuthorizationServer::new(
+            cfg,
+            vec![Client::new("spa", vec!["https://app.example/cb".into()])],
+            key,
+        );
+        assert!(srv
+            .openid_configuration()
+            .contains("\"require_pushed_authorization_requests\":true"));
+        let challenge = pkce::challenge_s256(&"a".repeat(43)).unwrap();
+        assert_eq!(
+            srv.begin_authorize(
+                &AuthorizeRequest {
+                    response_type: "code".into(),
+                    client_id: "spa".into(),
+                    redirect_uri: "https://app.example/cb".into(),
+                    code_challenge: challenge.clone(),
+                    code_challenge_method: "S256".into(),
+                    state: None,
+                    scope: None,
+                    nonce: None,
+                    request_uri: None,
+                },
+                1_000,
+            ),
+            Err(OAuthError::InvalidRequest)
+        );
+        let pushed = srv
+            .push_authorization(
+                &AuthorizeRequest {
+                    response_type: "code".into(),
+                    client_id: "spa".into(),
+                    redirect_uri: "https://app.example/cb".into(),
+                    code_challenge: challenge,
+                    code_challenge_method: "S256".into(),
+                    state: None,
+                    scope: None,
+                    nonce: None,
+                    request_uri: None,
+                },
+                1_000,
+            )
+            .unwrap();
+        assert!(srv
+            .begin_authorize(
+                &AuthorizeRequest {
+                    response_type: String::new(),
+                    client_id: "spa".into(),
+                    redirect_uri: String::new(),
+                    code_challenge: String::new(),
+                    code_challenge_method: String::new(),
+                    state: None,
+                    scope: None,
+                    nonce: None,
+                    request_uri: Some(pushed.request_uri),
+                },
+                1_001,
+            )
+            .is_ok());
     }
 
     #[test]

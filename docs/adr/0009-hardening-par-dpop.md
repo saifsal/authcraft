@@ -18,8 +18,10 @@ access tokens. M4 adds those without confidential-client auth or real login.
 3. `GET /authorize` may use `client_id` + `request_uri` instead of the full
    query. The URI is **single-use**. Wrong `client_id`, unknown, expired, or
    replayed URI → `invalid_request`.
-4. PAR is **optional**; direct `/authorize` remains valid.
-   `require_pushed_authorization_requests` is `false` in discovery.
+4. PAR is **optional** by default (`ServerConfig.require_par = false`);
+   discovery mirrors that as `require_pushed_authorization_requests`.
+   When `require_par` is true, `/authorize` without `request_uri` is
+   `invalid_request`.
 5. In-memory `ParStore` only.
 
 ## Amendments
@@ -70,5 +72,6 @@ access tokens. M4 adds those without confidential-client auth or real login.
 
 ## Alternatives considered
 
-- **Require PAR for all clients.** Rejected for this educational slice.
+- **Require PAR for all clients by default.** Demo keeps `require_par=false`;
+  enforcement is available when the flag is set.
 - **JAR / request objects.** Deferred; PAR body is enough for M4.

@@ -23,14 +23,21 @@ as alternate paths to the same `LoginSubject` → `finish_authorize` bridge.
 
 ## Amendments
 
-### B2 — LDAP (pending)
+### B2 — LDAP bind gateway
+
+1. Trait `DirectoryBind::authenticate(username, password) -> LoginSubject`.
+2. `MemoryDirectory` (Argon2id) for demos and CI — no live OpenLDAP required.
+3. HTTP `POST /login/ldap` when `AppState.directory` is set; same authorize ticket
+   → `finish_authorize`. Local MFA does not apply.
+4. Real `ldap3` wire protocol deferred; `ldap_url` config reserved for later.
 
 ## Consequences
 
-- Demo leaves `oidc_rp` unset unless tests configure it.
-- Requires outbound HTTP (`reqwest`) from `oauth-http`.
+- Demo leaves `oidc_rp` / `directory` unset unless tests configure them.
+- Requires outbound HTTP (`reqwest`) from `oauth-http` for the OIDC RP path.
 
 ## Alternatives considered
 
 - **Loopback to self as upstream.** Rejected for tests; use an ephemeral stub OP.
 - **SAML.** Deferred.
+- **Require OpenLDAP in CI.** Rejected; `MemoryDirectory` is the educational stand-in.

@@ -14,8 +14,9 @@ use axum::{Json, Router};
 use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, DynamicClientRequest, LoginSubject, OAuthError,
-    OidcRpConfig, PendingAuthorization, ServerConfig, TokenRequest, TokenTypeHint, DEMO_ADMIN_TOKEN,
+    AuthorizationServer, AuthorizeRequest, Client, DirectoryBind, DynamicClientRequest,
+    LoginSubject, OAuthError, OidcRpConfig, PendingAuthorization, ServerConfig, TokenRequest,
+    TokenTypeHint, DEMO_ADMIN_TOKEN,
 };
 use serde::Deserialize;
 
@@ -42,6 +43,8 @@ pub struct AppState {
     mfa_pending: Arc<Mutex<HashMap<String, MfaPending>>>,
     pub oidc_rp: Option<OidcRpConfig>,
     oidc_pending: Arc<Mutex<HashMap<String, OidcPending>>>,
+    /// Optional LDAP-style directory (in-memory for demos/tests).
+    pub directory: Option<Arc<dyn DirectoryBind>>,
     http: reqwest::Client,
 }
 
@@ -53,12 +56,18 @@ impl AppState {
             mfa_pending: Arc::new(Mutex::new(HashMap::new())),
             oidc_rp: None,
             oidc_pending: Arc::new(Mutex::new(HashMap::new())),
+            directory: None,
             http: reqwest::Client::new(),
         }
     }
 
     pub fn with_oidc_rp(mut self, cfg: OidcRpConfig) -> Self {
         self.oidc_rp = Some(cfg);
+        self
+    }
+
+    pub fn with_directory(mut self, directory: Arc<dyn DirectoryBind>) -> Self {
+        self.directory = Some(directory);
         self
     }
 
@@ -96,6 +105,7 @@ pub fn app(state: AppState) -> Router {
         .route("/login", get(login_get).post(login_post))
         .route("/login/oidc/start", get(oidc_start))
         .route("/login/oidc/callback", get(oidc_callback))
+        .route("/login/ldap", post(ldap_login))
         .route("/login/mfa", get(mfa_get).post(mfa_post))
         .route("/login/mfa/webauthn/start", post(mfa_webauthn_start))
         .route("/login/mfa/webauthn/finish", post(mfa_webauthn_finish))
@@ -495,12 +505,23 @@ async fn par(State(state): State<AppState>, Form(form): Form<ParForm>) -> Respon
     }
 }
 
-fn login_page(error: Option<&str>, oidc_enabled: bool) -> Html<String> {
+fn login_page(error: Option<&str>, oidc_enabled: bool, ldap_enabled: bool) -> Html<String> {
     let err = error
         .map(|e| format!("<p style=\"color:red\">{e}</p>"))
         .unwrap_or_default();
     let oidc = if oidc_enabled {
         r#"<p><a href="/login/oidc/start">Sign in with upstream OpenID Provider</a></p>"#
+    } else {
+        ""
+    };
+    let ldap = if ldap_enabled {
+        r#"
+  <h2>Directory (LDAP gateway)</h2>
+  <form method="post" action="/login/ldap">
+    <label>Username <input name="username" /></label>
+    <label>Password <input name="password" type="password" /></label>
+    <button type="submit">Sign in via directory</button>
+  </form>"#
     } else {
         ""
     };
@@ -517,12 +538,13 @@ fn login_page(error: Option<&str>, oidc_enabled: bool) -> Html<String> {
     <button type="submit">Sign in</button>
   </form>
   {oidc}
+  {ldap}
 </body></html>"#
     ))
 }
 
 async fn login_get(State(state): State<AppState>) -> Html<String> {
-    login_page(None, state.oidc_rp.is_some())
+    login_page(None, state.oidc_rp.is_some(), state.directory.is_some())
 }
 
 #[derive(Debug, Deserialize)]
@@ -620,7 +642,7 @@ async fn oidc_callback(
     if q.error.is_some() {
         return (
             StatusCode::BAD_REQUEST,
-            login_page(Some("Upstream login failed"), true),
+            login_page(Some("Upstream login failed"), true, state.directory.is_some()),
         )
             .into_response();
     }
@@ -677,7 +699,11 @@ async fn oidc_callback(
         Err(_) => {
             return (
                 StatusCode::BAD_GATEWAY,
-                login_page(Some("Upstream token missing id_token"), true),
+                login_page(
+                    Some("Upstream token missing id_token"),
+                    true,
+                    state.directory.is_some(),
+                ),
             )
                 .into_response();
         }
@@ -706,7 +732,11 @@ async fn oidc_callback(
         Err(_) => {
             return (
                 StatusCode::UNAUTHORIZED,
-                login_page(Some("Invalid upstream ID token"), true),
+                login_page(
+                    Some("Invalid upstream ID token"),
+                    true,
+                    state.directory.is_some(),
+                ),
             )
                 .into_response();
         }
@@ -719,6 +749,57 @@ async fn oidc_callback(
     let Some(pending) = pending else {
         return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
     };
+
+    match state.server.finish_authorize(pending, &login, now_unix()) {
+        Ok(success) => redirect_with_code(&success),
+        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LdapLoginForm {
+    pub username: String,
+    pub password: String,
+}
+
+async fn ldap_login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<LdapLoginForm>,
+) -> Response {
+    let Some(directory) = state.directory.as_ref() else {
+        return (StatusCode::NOT_FOUND, "directory not configured").into_response();
+    };
+    let Some(ticket) = cookie_ticket(&headers) else {
+        return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
+    };
+    let pending = {
+        let map = state.pending.lock().expect("pending lock");
+        map.get(&ticket).cloned()
+    };
+    let Some(pending) = pending else {
+        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
+    };
+
+    let login = match directory.authenticate(form.username.trim(), &form.password) {
+        Ok(login) => login,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                login_page(
+                    Some("Invalid directory credentials"),
+                    state.oidc_rp.is_some(),
+                    true,
+                ),
+            )
+                .into_response();
+        }
+    };
+
+    {
+        let mut map = state.pending.lock().expect("pending lock");
+        map.remove(&ticket);
+    }
 
     match state.server.finish_authorize(pending, &login, now_unix()) {
         Ok(success) => redirect_with_code(&success),
@@ -751,7 +832,11 @@ async fn login_post(
         Err(_) => {
             return (
                 StatusCode::UNAUTHORIZED,
-                login_page(Some("Invalid username or password"), state.oidc_rp.is_some()),
+                login_page(
+                    Some("Invalid username or password"),
+                    state.oidc_rp.is_some(),
+                    state.directory.is_some(),
+                ),
             )
                 .into_response();
         }

@@ -37,14 +37,14 @@ also use an empty signature segment. Under ADR 0003 the verdicts are:
 
 | Vector | Result | What the case locks |
 |---|---|---|
-| `rfc7515-a1-hs256` | `key_not_found` | Missing `kid`. The Rust signature test checks the HMAC. |
+| `rfc7515-a1-hs256` | `key_not_found` | Missing `kid`. The Rust and Zig signature tests check the HMAC. |
 | `rfc7515-a2-rs256` | `alg_not_allowed` | `RS256` is outside the allowlist. The JWKS is empty; `kty` `RSA` is outside the schema. |
-| `rfc7515-a3-es256` | `key_not_found` | Missing `kid`. The Rust signature test checks the ES256 signature. |
+| `rfc7515-a3-es256` | `key_not_found` | Missing `kid`. The Rust and Zig signature tests check the ES256 signature. |
 | `rfc7515-a4-es512` | `alg_not_allowed` | `ES512` is outside the allowlist. |
 | `rfc7515-a5-none` | `malformed` | Empty signature segment, which fails before `alg` is read. |
 | `rfc7515-e-crit` | `malformed` | Empty signature segment, which fails before `crit` is read. |
-| `rfc8037-a4-eddsa` | `key_not_found` | Missing `kid`. The Rust signature test checks the EdDSA signature. |
+| `rfc8037-a4-eddsa` | `key_not_found` | Missing `kid`. The Rust and Zig signature tests check the EdDSA signature. |
 
 Policies for the Appendix A.1 payload use `now` `1300819379`, one second before
-that payload's `exp`, and omit `iss` and `aud`. The Zig verifier and Go harness
-will run the same files.
+that payload's `exp`, and omit `iss` and `aud`. Rust and Zig already run these
+files; the Go harness will run the same set.

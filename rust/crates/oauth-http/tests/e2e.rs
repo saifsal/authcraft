@@ -1,4 +1,4 @@
-//! End-to-end authorize → login → token → jose verify.
+//! End-to-end authorize → login → token → jose verify (+ OIDC).
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
@@ -6,6 +6,7 @@ use http_body_util::BodyExt;
 use jose::alg::Alg;
 use jose::jwks::Jwks;
 use jose::verify::{self, Policy};
+use oauth::id_token;
 use oauth::pkce;
 use oauth_http::{app, AppState};
 use tower::ServiceExt;
@@ -100,6 +101,7 @@ async fn authorize_login_token_verifies() {
     assert_eq!(res.status(), StatusCode::OK);
     let body = body_string(res).await;
     let access_token = json_string_field(&body, "access_token").expect("access_token");
+    assert!(json_string_field(&body, "id_token").is_none());
 
     let jwks_res = app
         .oneshot(
@@ -112,10 +114,7 @@ async fn authorize_login_token_verifies() {
         .unwrap();
     let jwks_body = body_string(jwks_res).await;
     let jwks = Jwks::parse(jwks_body.as_bytes()).unwrap();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = now_unix();
     verify::verify(
         access_token.as_bytes(),
         &jwks,
@@ -132,6 +131,147 @@ async fn authorize_login_token_verifies() {
     .expect("access token verifies");
 }
 
+#[tokio::test]
+async fn openid_flow_id_token_and_userinfo() {
+    let state = AppState::demo();
+    let app = app(state.clone());
+
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let challenge = pkce::challenge_s256(verifier).unwrap();
+    let authorize_uri = format!(
+        "/authorize?response_type=code&client_id=spa&redirect_uri={}&code_challenge={}&code_challenge_method=S256&scope=openid%20profile%20email&nonce=n-0S6_WzA2Mj",
+        urlencoding_encode("https://app.example/cb"),
+        urlencoding_encode(&challenge),
+    );
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&authorize_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = cookie_from(&res);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "subject=alice&name=Alice&email=alice%40example.com",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = res
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let code = query_param(&location, "code").expect("code");
+
+    let form = format!(
+        "grant_type=authorization_code&code={}&redirect_uri={}&client_id=spa&code_verifier={}",
+        urlencoding_encode(&code),
+        urlencoding_encode("https://app.example/cb"),
+        urlencoding_encode(verifier),
+    );
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_string(res).await;
+    let access_token = json_string_field(&body, "access_token").expect("access_token");
+    let id_token = json_string_field(&body, "id_token").expect("id_token");
+
+    let disc = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/.well-known/openid-configuration")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(disc.status(), StatusCode::OK);
+    let disc_body = body_string(disc).await;
+    assert!(disc_body.contains("\"userinfo_endpoint\""));
+
+    let jwks_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/.well-known/jwks.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let jwks = Jwks::parse(body_string(jwks_res).await.as_bytes()).unwrap();
+    let now = now_unix();
+    let id_verified = verify::verify(
+        id_token.as_bytes(),
+        &jwks,
+        &Policy {
+            algorithms: vec![Alg::EdDSA],
+            issuer: Some("http://127.0.0.1:8089".into()),
+            audience: Some("spa".into()),
+            now,
+            leeway: 5,
+            typ: Some("JWT".into()),
+            max_token_bytes: 8192,
+        },
+    )
+    .expect("id_token verifies");
+    assert_eq!(
+        id_verified.claims.get("at_hash").and_then(|v| v.as_str()),
+        Some(id_token::at_hash_eddsa(&access_token).as_str())
+    );
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/userinfo")
+                .header(header::AUTHORIZATION, format!("Bearer {access_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let info = body_string(res).await;
+    assert!(info.contains("\"sub\":\"alice\""));
+    assert!(info.contains("\"name\":\"Alice\""));
+    assert!(info.contains("\"email\":\"alice@example.com\""));
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
 fn query_param(url: &str, name: &str) -> Option<String> {
     let q = url.split_once('?')?.1;
     for pair in q.split('&') {
@@ -144,7 +284,6 @@ fn query_param(url: &str, name: &str) -> Option<String> {
 }
 
 fn json_string_field(body: &str, name: &str) -> Option<String> {
-    // Tiny extractor avoiding a full JSON dependency API in the test.
     let key = format!("\"{name}\":\"");
     let start = body.find(&key)? + key.len();
     let rest = &body[start..];

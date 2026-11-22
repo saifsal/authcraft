@@ -1,4 +1,4 @@
-//! Axum HTTP surface for authcraft M1 OAuth (ADR 0005).
+//! Axum HTTP surface for authcraft OAuth + OIDC (ADR 0005, ADR 0006).
 
 #![forbid(unsafe_code)]
 
@@ -14,8 +14,8 @@ use axum::{Json, Router};
 use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, OAuthError, PendingAuthorization, ServerConfig,
-    TokenRequest,
+    AuthorizationServer, AuthorizeRequest, Client, LoginSubject, OAuthError, PendingAuthorization,
+    ServerConfig, TokenRequest,
 };
 use serde::Deserialize;
 
@@ -54,9 +54,14 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { StatusCode::OK }))
         .route("/.well-known/jwks.json", get(jwks))
+        .route(
+            "/.well-known/openid-configuration",
+            get(openid_configuration),
+        )
         .route("/authorize", get(authorize))
         .route("/login", get(login_get).post(login_post))
         .route("/token", post(token))
+        .route("/userinfo", get(userinfo))
         .with_state(state)
 }
 
@@ -83,6 +88,7 @@ pub struct AuthorizeQuery {
     pub code_challenge_method: Option<String>,
     pub state: Option<String>,
     pub scope: Option<String>,
+    pub nonce: Option<String>,
 }
 
 async fn authorize(
@@ -97,6 +103,7 @@ async fn authorize(
         code_challenge_method: q.code_challenge_method.unwrap_or_default(),
         state: q.state,
         scope: q.scope,
+        nonce: q.nonce,
     };
 
     match state.server.begin_authorize(&req) {
@@ -110,21 +117,20 @@ async fn authorize(
             let mut headers = HeaderMap::new();
             headers.insert(
                 header::SET_COOKIE,
-                HeaderValue::from_str(&format!("authcraft_login={ticket}; Path=/; HttpOnly; SameSite=Lax"))
-                    .expect("cookie header"),
+                HeaderValue::from_str(&format!(
+                    "authcraft_login={ticket}; Path=/; HttpOnly; SameSite=Lax"
+                ))
+                .expect("cookie header"),
             );
             (headers, Redirect::to("/login")).into_response()
         }
-        Err(err) => {
-            // Before a validated redirect_uri, do not redirect.
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": err.code(),
-                })),
-            )
-                .into_response()
-        }
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": err.code(),
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -134,9 +140,11 @@ async fn login_get() -> Html<&'static str> {
 <html><head><title>authcraft login</title></head>
 <body>
   <h1>Stub login</h1>
-  <p>Educational stub — no password (ADR 0005).</p>
+  <p>Educational stub — no password (ADR 0005 / ADR 0006).</p>
   <form method="post" action="/login">
     <label>Subject <input name="subject" value="alice" /></label>
+    <label>Name <input name="name" value="Alice" /></label>
+    <label>Email <input name="email" value="alice@example.com" /></label>
     <button type="submit">Continue</button>
   </form>
 </body></html>"#,
@@ -146,6 +154,8 @@ async fn login_get() -> Html<&'static str> {
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
     pub subject: String,
+    pub name: Option<String>,
+    pub email: Option<String>,
 }
 
 fn cookie_ticket(headers: &HeaderMap) -> Option<String> {
@@ -157,6 +167,10 @@ fn cookie_ticket(headers: &HeaderMap) -> Option<String> {
         }
     }
     None
+}
+
+fn nonempty_opt(s: Option<String>) -> Option<String> {
+    s.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
 async fn login_post(
@@ -175,10 +189,13 @@ async fn login_post(
         return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
     };
 
-    match state
-        .server
-        .finish_authorize(pending, form.subject.trim(), now_unix())
-    {
+    let login = LoginSubject {
+        subject: form.subject.trim().to_owned(),
+        name: nonempty_opt(form.name),
+        email: nonempty_opt(form.email),
+    };
+
+    match state.server.finish_authorize(pending, &login, now_unix()) {
         Ok(success) => {
             let mut url = url::Url::parse(&success.redirect_uri).expect("validated redirect_uri");
             {
@@ -212,12 +229,17 @@ async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Re
         code_verifier: form.code_verifier.unwrap_or_default(),
     };
     match state.server.exchange_token(&req, now_unix()) {
-        Ok(tok) => Json(serde_json::json!({
-            "access_token": tok.access_token,
-            "token_type": tok.token_type,
-            "expires_in": tok.expires_in,
-        }))
-        .into_response(),
+        Ok(tok) => {
+            let mut body = serde_json::json!({
+                "access_token": tok.access_token,
+                "token_type": tok.token_type,
+                "expires_in": tok.expires_in,
+            });
+            if let Some(id_token) = tok.id_token {
+                body["id_token"] = serde_json::Value::String(id_token);
+            }
+            Json(body).into_response()
+        }
         Err(err) => token_error(err),
     }
 }
@@ -225,7 +247,7 @@ async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Re
 fn token_error(err: OAuthError) -> Response {
     let status = match err {
         OAuthError::InvalidRequest | OAuthError::UnsupportedGrantType => StatusCode::BAD_REQUEST,
-        OAuthError::UnauthorizedClient => StatusCode::UNAUTHORIZED,
+        OAuthError::UnauthorizedClient | OAuthError::InvalidToken => StatusCode::UNAUTHORIZED,
         OAuthError::InvalidGrant => StatusCode::BAD_REQUEST,
         OAuthError::ServerError => StatusCode::INTERNAL_SERVER_ERROR,
     };
@@ -244,4 +266,53 @@ async fn jwks(State(state): State<AppState>) -> Response {
         state.server.jwks_document(),
     )
         .into_response()
+}
+
+async fn openid_configuration(State(state): State<AppState>) -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        state.server.openid_configuration(),
+    )
+        .into_response()
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    value.strip_prefix("Bearer ")
+}
+
+async fn userinfo(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(token) = bearer_token(&headers) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(
+                header::WWW_AUTHENTICATE,
+                HeaderValue::from_static(r#"Bearer error="invalid_token""#),
+            )],
+            Json(serde_json::json!({"error": "invalid_token"})),
+        )
+            .into_response();
+    };
+
+    match state.server.userinfo(token, now_unix()) {
+        Ok(info) => {
+            let mut body = serde_json::json!({ "sub": info.sub });
+            if let Some(name) = info.name {
+                body["name"] = serde_json::Value::String(name);
+            }
+            if let Some(email) = info.email {
+                body["email"] = serde_json::Value::String(email);
+            }
+            Json(body).into_response()
+        }
+        Err(err) => (
+            StatusCode::UNAUTHORIZED,
+            [(
+                header::WWW_AUTHENTICATE,
+                HeaderValue::from_static(r#"Bearer error="invalid_token""#),
+            )],
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
+    }
 }

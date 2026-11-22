@@ -16,6 +16,8 @@ pub struct TokenClaims<'a> {
     pub sub: &'a str,
     pub client_id: &'a str,
     pub scope: Option<&'a str>,
+    pub name: Option<&'a str>,
+    pub email: Option<&'a str>,
     pub iat: i64,
     pub exp: i64,
 }
@@ -40,6 +42,12 @@ pub fn mint_access_token(
     if let Some(scope) = claims.scope {
         payload.push_str(&format!(r#","scope":"{}""#, json_escape(scope)));
     }
+    if let Some(name) = claims.name {
+        payload.push_str(&format!(r#","name":"{}""#, json_escape(name)));
+    }
+    if let Some(email) = claims.email {
+        payload.push_str(&format!(r#","email":"{}""#, json_escape(email)));
+    }
     payload.push('}');
 
     signing::sign_compact(Alg::EdDSA, pkcs8, header.as_bytes(), payload.as_bytes()).map_err(
@@ -56,7 +64,7 @@ pub fn mint_access_token(
     )
 }
 
-fn json_escape(s: &str) -> String {
+pub(crate) fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

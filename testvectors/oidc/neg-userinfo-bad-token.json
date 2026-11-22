@@ -1,0 +1,11 @@
+{
+  "id": "neg-userinfo-bad-token",
+  "source": "RFC 6750 / OIDC Core UserInfo (authcraft ADR 0006)",
+  "description": "Malformed Bearer access token yields invalid_token at UserInfo.",
+  "steps": {},
+  "expect": {
+    "ok": false,
+    "error": "invalid_token",
+    "phase": "userinfo"
+  }
+}

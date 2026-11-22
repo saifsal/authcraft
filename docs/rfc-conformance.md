@@ -59,6 +59,17 @@ Profile: [ADR 0005](adr/0005-oauth-code-pkce.md). Narrative: [oauth-m1.md](oauth
 | RFC 7636 | S256 PKCE required; `plain` rejected; verifier length/charset | `testvectors/oauth/` + `oauth` tests (incl. RFC Appendix B challenge) |
 | RFC 9068 (partial) | Access tokens are `at+jwt` with `iss`/`aud`/`exp`/`sub` | Minted by `oauth`, verified with M0 `jose` |
 
+## M2 OpenID Connect (code + PKCE)
+
+Profile: [ADR 0006](adr/0006-oidc-core-code.md). Narrative: [oauth-m2.md](oauth-m2.md).
+
+| Specification | In-scope behavior | Evidence |
+|---|---|---|
+| OIDC Core §3.1 | `openid` scope → ID token; `nonce` required; code flow only | `testvectors/oidc/` + `oauth` / `oauth-http` tests |
+| OIDC Core §3.1.3.6 | `at_hash` for EdDSA (SHA-256 left half) | `oauth::id_token::at_hash_eddsa` + vectors |
+| OIDC Discovery 1.0 | `/.well-known/openid-configuration` | `oauth-http` |
+| OIDC UserInfo | Bearer `at+jwt` → `{sub, name?, email?}` | `AuthorizationServer::userinfo` + e2e |
+
 ## Other RFCs referenced by the project
 
 These specifications inform later milestones or provide context:
@@ -66,7 +77,6 @@ These specifications inform later milestones or provide context:
 | Specification | Planned relevance |
 |---|---|
 | RFC 9700, OAuth 2.0 Security BCP | Later OAuth hardening milestone (M4) |
-| OpenID Connect Core 1.0 | Later OIDC milestone (M2) |
 
 ## Checked-in RFC vectors
 

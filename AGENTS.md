@@ -6,7 +6,7 @@ authcraft is an educational OAuth 2.0 / OpenID Connect identity provider. Its pu
 
 Milestone M0 (JOSE) is complete for the shared-vector contract. The Rust library crate `jose` at `rust/crates/jose` signs and verifies compact JWS/JWT payloads, parses JWK and JWKS documents, computes RFC 7638 thumbprints, and enforces the verifier rules in `docs/adr/0003-verifier-check-order.md`. Generated vectors live under `testvectors/generated/`; compact RFC examples under `testvectors/rfc/`. Zig (`zig/`) and Go (`go/jose`) implement the same verifier; `go/harness` differentials against `jose-cli`. Milestone M1 adds `rust/crates/oauth` (authorization code + PKCE S256) and `rust/crates/oauth-http` (Axum binder) with protocol vectors under `testvectors/oauth/`. Later milestones (OIDC, token lifecycle, real authentication, control plane, federation) are planned.
 
-M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). M1 adds a Rust `oauth` library and `oauth-http` Axum binder for authorization code + PKCE (ADR 0005). [`docs/rfc-conformance.md`](docs/rfc-conformance.md) remains the scope map; [`docs/oauth-m1.md`](docs/oauth-m1.md) covers the OAuth slice. Accepted decisions are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md). The Zig edge-auth sidecar is still open.
+M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). M1 adds a Rust `oauth` library and `oauth-http` Axum binder for authorization code + PKCE (ADR 0005). M2 extends those crates with OpenID Connect (ID token, discovery, UserInfo; ADR 0006). [`docs/rfc-conformance.md`](docs/rfc-conformance.md) remains the scope map; [`docs/oauth-m1.md`](docs/oauth-m1.md) and [`docs/oauth-m2.md`](docs/oauth-m2.md) cover the OAuth/OIDC slices. Accepted decisions are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md). The Zig edge-auth sidecar is still open.
 
 ## Repository layout
 
@@ -21,9 +21,11 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). M1 
 │   │   ├── 0002-vectors-are-the-contract.md
 │   │   ├── 0003-verifier-check-order.md   # exact check order and error codes
 │   │   ├── 0004-zig-c-abi.md              # Zig verify C ABI for embedding
-│   │   └── 0005-oauth-code-pkce.md        # M1 authorization code + PKCE
-│   ├── rfc-conformance.md                 # M0/M1 scope map
-│   └── oauth-m1.md                        # M1 runbook
+│   │   ├── 0005-oauth-code-pkce.md        # M1 authorization code + PKCE
+│   │   └── 0006-oidc-core-code.md         # M2 OpenID Connect (code + PKCE)
+│   ├── rfc-conformance.md                 # M0/M1/M2 scope map
+│   ├── oauth-m1.md                        # M1 runbook
+│   └── oauth-m2.md                        # M2 OIDC runbook
 ├── rust/
 │   ├── Cargo.toml                         # workspace; jose, jose-cli, oauth, oauth-http
 │   ├── Cargo.lock
@@ -53,8 +55,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). M1 
 │       └── tests/verify.rs                # runs jose-cli against testvectors/
 │   ├── crates/oauth/
 │   │   ├── Cargo.toml                     # package oauth 0.1.0; depends on jose + ring
-│   │   ├── src/                           # pkce, client, code, token, server, error
-│   │   └── tests/vectors.rs               # runs testvectors/oauth/
+│   │   ├── src/                           # pkce, client, code, token, id_token, server, error
+│   │   └── tests/vectors.rs               # runs testvectors/oauth/ and testvectors/oidc/
 │   └── crates/oauth-http/
 │       ├── Cargo.toml                     # Axum binary + lib; depends on oauth, jose
 │       ├── src/main.rs                    # binds 127.0.0.1:8089
@@ -87,6 +89,7 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). M1 
 │   ├── generated/                         # ADR 0003 negative and boundary vectors
 │   ├── rfc/                               # compact examples copied from RFC 7515 and RFC 8037
 │   ├── oauth/                             # M1 PKCE / code-exchange vectors (ADR 0005)
+│   ├── oidc/                              # M2 openid / nonce / UserInfo vectors (ADR 0006)
 │   └── schema.json                        # JOSE vector schema
 ├── LICENSE                                # GNU GPL version 3
 ├── README.md

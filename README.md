@@ -256,7 +256,9 @@ Useful design notes while changing verification:
 - [`docs/adr/0003-verifier-check-order.md`](docs/adr/0003-verifier-check-order.md) — check order, error codes, and the minimum negative-vector list.
 - [`docs/adr/0004-zig-c-abi.md`](docs/adr/0004-zig-c-abi.md) — Zig `authcraft_jose_verify` C ABI for embedding.
 - [`docs/adr/0005-oauth-code-pkce.md`](docs/adr/0005-oauth-code-pkce.md) — M1 authorization code + PKCE profile.
+- [`docs/adr/0006-oidc-core-code.md`](docs/adr/0006-oidc-core-code.md) — M2 OpenID Connect (code + PKCE) profile.
 - [`docs/oauth-m1.md`](docs/oauth-m1.md) — how to run the M1 library and HTTP demo.
+- [`docs/oauth-m2.md`](docs/oauth-m2.md) — how to exercise OIDC discovery, ID tokens, and UserInfo.
 
 Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.md).
 
@@ -266,7 +268,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 |---|---|---|
 | **M0** | JOSE: JWS signing and verification, JWK/JWKS, thumbprints, shared test vectors | Complete for the verifier contract. Rust, Zig, and Go agree on `testvectors/`; Go differentials against `jose-cli`; CI regenerates vectors and runs all three suites; Zig exports `authcraft_jose_verify` (ADR 0004). Edge-auth sidecar remains later work. |
 | **M1** | OAuth 2.0 authorization code flow with PKCE | In progress. `oauth` library + `oauth-http` Axum binder (public clients, S256 required, stub login, in-memory codes). See [ADR 0005](docs/adr/0005-oauth-code-pkce.md) and [docs/oauth-m1.md](docs/oauth-m1.md). |
-| M2 | OpenID Connect: ID tokens, discovery, userinfo | Planned |
+| **M2** | OpenID Connect: ID tokens, discovery, userinfo | In progress. `openid` scope → ID token (`nonce`, `at_hash`), discovery, UserInfo on the same crates. See [ADR 0006](docs/adr/0006-oidc-core-code.md) and [docs/oauth-m2.md](docs/oauth-m2.md). |
 | M3 | Token lifecycle: refresh rotation, introspection, revocation, key rotation | Planned |
 | M4 | Hardening: PAR, DPoP, RFC 9700 checklist | Planned |
 | M5 | Authentication: Argon2id passwords, TOTP, WebAuthn | Planned |

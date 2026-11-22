@@ -1,0 +1,20 @@
+{
+  "id": "pos-non-openid",
+  "source": "authcraft ADR 0005/0006",
+  "description": "Non-openid scope still issues access token only (no id_token).",
+  "steps": {
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "code_challenge_method": "S256",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "scope": "read",
+    "nonce": "ignored-without-openid",
+    "now_authorize": 1000,
+    "now_token": 1001
+  },
+  "expect": {
+    "ok": true,
+    "id_token": false
+  }
+}

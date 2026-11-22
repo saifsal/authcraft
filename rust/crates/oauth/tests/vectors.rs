@@ -1,4 +1,4 @@
-//! Runs `testvectors/oauth/` against the oauth library (ADR 0005).
+//! Runs `testvectors/oauth/` and `testvectors/oidc/` against the oauth library.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,13 +8,18 @@ use jose::json::{self, Value};
 use jose::jwks::Jwks;
 use jose::signing::generate_signing_key;
 use jose::verify::{self, Policy};
+use oauth::id_token;
 use oauth::pkce;
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, ServerConfig, TokenRequest,
+    AuthorizationServer, AuthorizeRequest, Client, LoginSubject, ServerConfig, TokenRequest,
 };
 
-fn vectors_dir() -> PathBuf {
+fn oauth_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/oauth")
+}
+
+fn oidc_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/oidc")
 }
 
 fn string<'a>(v: &'a Value, name: &str) -> &'a str {
@@ -53,7 +58,7 @@ fn make_server() -> AuthorizationServer {
     )
 }
 
-fn run_vector(path: &Path) {
+fn run_code_flow_vector(path: &Path) {
     let case = path.display().to_string();
     let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
     let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -87,6 +92,7 @@ fn run_vector(path: &Path) {
         code_challenge_method: method.into(),
         state: optional_string(steps, "state").map(str::to_owned),
         scope: optional_string(steps, "scope").map(str::to_owned),
+        nonce: optional_string(steps, "nonce").map(str::to_owned),
     });
 
     let phase = optional_string(expect, "phase").unwrap_or(if ok { "token" } else { "authorize" });
@@ -98,8 +104,13 @@ fn run_vector(path: &Path) {
     }
 
     let pending = begin.unwrap_or_else(|e| panic!("{case}: authorize failed: {e}"));
+    let login = LoginSubject {
+        subject: subject.into(),
+        name: optional_string(steps, "name").map(str::to_owned),
+        email: optional_string(steps, "email").map(str::to_owned),
+    };
     let issued = srv
-        .finish_authorize(pending, subject, now_auth)
+        .finish_authorize(pending, &login, now_auth)
         .unwrap_or_else(|e| panic!("{case}: finish: {e}"));
 
     let token_verifier = optional_string(steps, "token_code_verifier").unwrap_or(verifier);
@@ -141,23 +152,103 @@ fn run_vector(path: &Path) {
             },
         )
         .unwrap_or_else(|e| panic!("{case}: jwt verify: {e}"));
+
+        let expect_id = bool_field(expect, "id_token");
+        if expect_id {
+            let id = token.id_token.as_ref().expect("id_token present");
+            let verified = verify::verify(
+                id.as_bytes(),
+                &jwks,
+                &Policy {
+                    algorithms: vec![Alg::EdDSA],
+                    issuer: Some("https://auth.example".into()),
+                    audience: Some(client_id.into()),
+                    now: now_token,
+                    leeway: 0,
+                    typ: Some("JWT".into()),
+                    max_token_bytes: 8192,
+                },
+            )
+            .unwrap_or_else(|e| panic!("{case}: id_token verify: {e}"));
+            if let Some(nonce) = optional_string(steps, "nonce") {
+                assert_eq!(
+                    verified.claims.get("nonce").and_then(|v| v.as_str()),
+                    Some(nonce),
+                    "{case}"
+                );
+            }
+            let expected_hash = id_token::at_hash_eddsa(&token.access_token);
+            assert_eq!(
+                verified.claims.get("at_hash").and_then(|v| v.as_str()),
+                Some(expected_hash.as_str()),
+                "{case}"
+            );
+        } else {
+            assert!(token.id_token.is_none(), "{case}: unexpected id_token");
+        }
+
+        if bool_field(steps, "check_userinfo") {
+            let info = srv
+                .userinfo(&token.access_token, now_token)
+                .unwrap_or_else(|e| panic!("{case}: userinfo: {e}"));
+            assert_eq!(info.sub, subject, "{case}");
+            if let Some(name) = optional_string(steps, "name") {
+                assert_eq!(info.name.as_deref(), Some(name), "{case}");
+            }
+            if let Some(email) = optional_string(steps, "email") {
+                assert_eq!(info.email.as_deref(), Some(email), "{case}");
+            }
+        }
     } else {
         let err = first.expect_err("expected token failure");
         assert_eq!(err.code(), string(expect, "error"), "{case}");
     }
 }
 
-#[test]
-fn oauth_shared_vectors() {
-    let dir = vectors_dir();
-    let mut files: Vec<PathBuf> = fs::read_dir(&dir)
+fn run_userinfo_reject_vector(path: &Path) {
+    let case = path.display().to_string();
+    let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let expect = root.get("expect").expect("expect");
+    let srv = make_server();
+    let err = srv
+        .userinfo("not.a.jwt", 1_000)
+        .expect_err("expected userinfo failure");
+    assert_eq!(err.code(), string(expect, "error"), "{case}");
+}
+
+fn load_json_vectors(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "json") && p.file_name() != Some("schema.json".as_ref()))
+        .filter(|p| {
+            p.extension().is_some_and(|ext| ext == "json")
+                && p.file_name() != Some("schema.json".as_ref())
+        })
         .collect();
     files.sort();
+    files
+}
+
+#[test]
+fn oauth_shared_vectors() {
+    let files = load_json_vectors(&oauth_vectors_dir());
     assert!(!files.is_empty(), "no oauth vectors");
     for f in files {
-        run_vector(&f);
+        run_code_flow_vector(&f);
+    }
+}
+
+#[test]
+fn oidc_shared_vectors() {
+    let files = load_json_vectors(&oidc_vectors_dir());
+    assert!(!files.is_empty(), "no oidc vectors");
+    for f in files {
+        let stem = f.file_stem().unwrap().to_str().unwrap();
+        if stem.starts_with("neg-userinfo") {
+            run_userinfo_reject_vector(&f);
+        } else {
+            run_code_flow_vector(&f);
+        }
     }
 }

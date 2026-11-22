@@ -1,4 +1,4 @@
-//! One-time authorization codes (ADR 0005).
+//! One-time authorization codes (ADR 0005 / ADR 0006).
 
 use std::collections::HashMap;
 
@@ -17,6 +17,9 @@ pub struct AuthorizationCode {
     pub code_challenge: String,
     pub subject: String,
     pub scope: Option<String>,
+    pub nonce: Option<String>,
+    pub name: Option<String>,
+    pub email: Option<String>,
     pub expires_at: i64,
 }
 

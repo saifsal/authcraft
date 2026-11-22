@@ -35,4 +35,18 @@ pub fn build(b: *std.Build) void {
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_unit_tests.step);
+
+    // Edge-auth JWT verify sidecar (ADR 0007).
+    const sidecar_mod = b.createModule(.{
+        .root_source_file = b.path("src/sidecar.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const sidecar_exe = b.addExecutable(.{
+        .name = "authcraft-edge",
+        .root_module = sidecar_mod,
+    });
+    b.installArtifact(sidecar_exe);
+    const sidecar_step = b.step("sidecar", "Build the edge-auth verify sidecar");
+    sidecar_step.dependOn(&b.addInstallArtifact(sidecar_exe, .{}).step);
 }

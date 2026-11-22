@@ -13,6 +13,7 @@ pub const policy = @import("policy.zig");
 pub const signature = @import("signature.zig");
 pub const verify = @import("verify.zig");
 pub const c_api = @import("c_api.zig");
+pub const sidecar_verify = @import("sidecar_verify.zig");
 
 test {
     _ = alg;
@@ -24,5 +25,6 @@ test {
     _ = signature;
     _ = verify;
     _ = c_api;
+    _ = sidecar_verify;
     _ = @import("vectors.zig");
 }

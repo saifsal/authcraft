@@ -46,7 +46,7 @@ fn sliceOrNull(ptr: ?[*]const u8, len: usize) ?[]const u8 {
 }
 
 /// C entry point. See `include/authcraft_jose.h` and ADR 0004.
-export fn authcraft_jose_verify(input: ?*const VerifyInput, result: ?*VerifyResult) callconv(.C) c_int {
+pub export fn authcraft_jose_verify(input: ?*const VerifyInput, result: ?*VerifyResult) callconv(.C) c_int {
     const out = result orelse return AUTHCRAFT_JOSE_INVALID;
     clearResult(out);
     const in = input orelse return AUTHCRAFT_JOSE_INVALID;

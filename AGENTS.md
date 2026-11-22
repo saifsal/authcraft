@@ -6,7 +6,7 @@ authcraft is an educational OAuth 2.0 / OpenID Connect identity provider. Its pu
 
 Milestone M0 (JOSE) is complete for the shared-vector contract. The Rust library crate `jose` at `rust/crates/jose` signs and verifies compact JWS/JWT payloads, parses JWK and JWKS documents, computes RFC 7638 thumbprints, and enforces the verifier rules in `docs/adr/0003-verifier-check-order.md`. Generated vectors live under `testvectors/generated/`; compact RFC examples under `testvectors/rfc/`. Zig (`zig/`) and Go (`go/jose`) implement the same verifier; `go/harness` differentials against `jose-cli`. Milestone M1 (`oauth` + `oauth-http`, `testvectors/oauth/`) is complete. M2 adds OIDC on those crates (`testvectors/oidc/`). Later milestones (token lifecycle, real authentication, control plane, federation) are planned.
 
-M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). M1 adds a Rust `oauth` library and `oauth-http` Axum binder for authorization code + PKCE (ADR 0005). M2 extends those crates with OpenID Connect (ID token, discovery, UserInfo; ADR 0006). [`docs/rfc-conformance.md`](docs/rfc-conformance.md) remains the scope map; [`docs/oauth-m1.md`](docs/oauth-m1.md) and [`docs/oauth-m2.md`](docs/oauth-m2.md) cover the OAuth/OIDC slices. Accepted decisions are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md). The Zig edge-auth sidecar is still open.
+M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `authcraft-edge` sidecar). M1 adds a Rust `oauth` library and `oauth-http` Axum binder for authorization code + PKCE (ADR 0005). M2 extends those crates with OpenID Connect (ID token, discovery, UserInfo; ADR 0006). [`docs/rfc-conformance.md`](docs/rfc-conformance.md) remains the scope map; [`docs/oauth-m1.md`](docs/oauth-m1.md) and [`docs/oauth-m2.md`](docs/oauth-m2.md) cover the OAuth/OIDC slices. Accepted decisions are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md).
 
 ## Repository layout
 
@@ -22,7 +22,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). M1 
 │   │   ├── 0003-verifier-check-order.md   # exact check order and error codes
 │   │   ├── 0004-zig-c-abi.md              # Zig verify C ABI for embedding
 │   │   ├── 0005-oauth-code-pkce.md        # M1 authorization code + PKCE
-│   │   └── 0006-oidc-core-code.md         # M2 OpenID Connect (code + PKCE)
+│   │   ├── 0006-oidc-core-code.md         # M2 OpenID Connect (code + PKCE)
+│   │   └── 0007-zig-edge-sidecar.md       # Zig authcraft-edge verify sidecar
 │   ├── rfc-conformance.md                 # M0/M1/M2 scope map
 │   ├── oauth-m1.md                        # M1 runbook
 │   └── oauth-m2.md                        # M2 OIDC runbook
@@ -79,6 +80,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). M1 
 │       ├── signature.zig                  # EdDSA, ES256, HS256 verification
 │       ├── verify.zig                     # compact JWS/JWT verification and claims
 │       ├── c_api.zig                      # authcraft_jose_verify export
+│       ├── sidecar_verify.zig             # Bearer + C ABI wiring (ADR 0007)
+│       ├── sidecar.zig                    # authcraft-edge HTTP binary
 │       └── vectors.zig                    # runs testvectors/ against the Zig verifier
 ├── go/
 │   ├── mise.toml                          # go = "1.27.4"
@@ -120,7 +123,7 @@ cd ../go && mise install
 
 ## Build, run and test
 
-JOSE crates are libraries (`publish = false`). M1/M2 use `oauth` (library) and `oauth-http` (Axum demo server on `127.0.0.1:8089`). Zig and Go packages remain verifier libraries (edge sidecar still open).
+JOSE crates are libraries (`publish = false`). M1/M2 use `oauth` (library) and `oauth-http` (Axum demo server on `127.0.0.1:8089`). Zig ships the verifier library, C ABI, and `authcraft-edge` (default `127.0.0.1:8091`). Go remains a verifier + harness.
 
 From `rust/`, with stable Rust on `PATH`:
 
@@ -139,7 +142,12 @@ From `zig/`:
 mise exec -- zig build test
 ```
 
-That command succeeded on Zig 0.14.1 and runs the library unit tests (including the C ABI), plus the shared-vector suite in `src/vectors.zig` (cwd is the `zig/` package directory, which resolves `../testvectors`). `zig build` installs `libjose.a`, `libauthcraft_jose.so`, and `include/authcraft_jose.h` under `zig-out/`.
+That command succeeded on Zig 0.14.1 and runs the library unit tests (including the C ABI and sidecar verify wiring), plus the shared-vector suite in `src/vectors.zig` (cwd is the `zig/` package directory, which resolves `../testvectors`). `zig build` installs `libjose.a`, `libauthcraft_jose.so`, and `include/authcraft_jose.h` under `zig-out/`. `zig build sidecar` (or a full `zig build`) installs `authcraft-edge`:
+
+```bash
+mise exec -- zig build sidecar
+./zig-out/bin/authcraft-edge --jwks jwks.json --policy policy.json
+```
 
 From `go/`:
 

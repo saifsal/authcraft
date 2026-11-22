@@ -22,7 +22,12 @@ wired into CI.
 
 ## Amendments
 
-### B2 — fuzzing (pending)
+### B2 — fuzzing
+
+1. `rust/fuzz/` cargo-fuzz targets (excluded from the workspace members):
+   `b64url_decode`, `json_parse`, `jose_verify`, `pkce_challenge`.
+2. CI job `fuzz-smoke` on nightly runs each target for 15 seconds.
+3. Stable companion: `jose/tests/parser_smoke.rs` feeds garbage without nightly.
 
 ### B3 — OpenID conformance checklist (pending)
 

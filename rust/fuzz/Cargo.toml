@@ -1,0 +1,43 @@
+[package]
+name = "authcraft-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+jose = { path = "../crates/jose" }
+oauth = { path = "../crates/oauth" }
+
+[[bin]]
+name = "b64url_decode"
+path = "fuzz_targets/b64url_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_parse"
+path = "fuzz_targets/json_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jose_verify"
+path = "fuzz_targets/jose_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pkce_challenge"
+path = "fuzz_targets/pkce_challenge.rs"
+test = false
+doc = false
+bench = false

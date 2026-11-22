@@ -94,3 +94,31 @@ jobs:
         run: |
           chmod +x "$AUTHCRAFT_JOSE_CLI"
           go test ./...
+
+  fuzz:
+    name: fuzz-smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz b64url (short)
+        run: cargo +nightly fuzz run b64url_decode -- -max_total_time=15
+
+      - name: Fuzz json (short)
+        run: cargo +nightly fuzz run json_parse -- -max_total_time=15
+
+      - name: Fuzz jose verify (short)
+        run: cargo +nightly fuzz run jose_verify -- -max_total_time=15
+
+      - name: Fuzz pkce (short)
+        run: cargo +nightly fuzz run pkce_challenge -- -max_total_time=15

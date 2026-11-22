@@ -144,6 +144,19 @@ impl UserStore {
         verify_password(password, &user.password_hash)?;
         Ok(user.login_subject())
     }
+
+    pub fn set_totp_secret(&mut self, username: &str, secret_b32: String) -> Result<(), AuthnError> {
+        let user = self
+            .get_mut(username.trim())
+            .ok_or(AuthnError::InvalidCredentials)?;
+        user.totp_secret = Some(secret_b32);
+        Ok(())
+    }
+
+    pub fn totp_secret(&self, username: &str) -> Option<String> {
+        self.get(username.trim())
+            .and_then(|u| u.totp_secret.clone())
+    }
 }
 
 fn dummy_hash() -> &'static str {

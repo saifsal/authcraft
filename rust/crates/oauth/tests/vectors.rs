@@ -12,6 +12,7 @@ use jose::signing::{self, generate_signing_key};
 use jose::verify::{self, Policy};
 use oauth::id_token;
 use oauth::pkce;
+use oauth::totp;
 use oauth::{
     hash_password, AuthorizationServer, AuthorizeRequest, Client, LoginSubject, ServerConfig,
     TokenRequest, UserRecord,
@@ -732,10 +733,11 @@ fn run_authn_vector(path: &Path) {
     let username = string(steps, "username");
     let seed_password = string(steps, "seed_password");
     let hash = hash_password(seed_password).expect("hash");
+    let subject = optional_string(steps, "subject").unwrap_or(username);
     srv.upsert_user(
         username,
         UserRecord {
-            subject: string(steps, "subject").into(),
+            subject: subject.into(),
             name: optional_string(steps, "name").map(str::to_owned),
             email: optional_string(steps, "email").map(str::to_owned),
             password_hash: hash,
@@ -744,13 +746,47 @@ fn run_authn_vector(path: &Path) {
         },
     );
 
-    let result = srv.authenticate_password(username, string(steps, "password"));
-    if bool_field(expect, "ok") {
-        let login = result.unwrap_or_else(|e| panic!("{case}: {e}"));
-        assert_eq!(login.subject, string(expect, "subject"), "{case}");
-    } else {
-        let err = result.expect_err("expected authn failure");
-        assert_eq!(err.code(), string(expect, "error"), "{case}");
+    match optional_string(steps, "action").unwrap_or("password") {
+        "password" => {
+            let result = srv.authenticate_password(username, string(steps, "password"));
+            if bool_field(expect, "ok") {
+                let login = result.unwrap_or_else(|e| panic!("{case}: {e}"));
+                assert_eq!(login.subject, string(expect, "subject"), "{case}");
+            } else {
+                let err = result.expect_err("expected authn failure");
+                assert_eq!(err.code(), string(expect, "error"), "{case}");
+            }
+        }
+        "totp" => {
+            let secret_b32 = string(steps, "totp_secret");
+            srv.set_totp_secret(username, secret_b32).unwrap();
+            assert!(srv.user_mfa_enrolled(username));
+            let login = srv
+                .authenticate_password(username, string(steps, "password"))
+                .unwrap_or_else(|e| panic!("{case} password: {e}"));
+            let secret = totp::decode_base32(secret_b32).unwrap();
+            let now = integer(steps, "now");
+            let code = if let Some(c) = optional_string(steps, "code") {
+                c.to_owned()
+            } else if let Some(at) = steps.get("code_at").and_then(Value::as_i64) {
+                totp::generate_code(&secret, at)
+            } else {
+                totp::generate_code(&secret, now)
+            };
+            let verify_at = steps
+                .get("verify_at")
+                .and_then(Value::as_i64)
+                .unwrap_or(now);
+            let result = srv.verify_totp(username, &code, verify_at);
+            if bool_field(expect, "ok") {
+                result.unwrap_or_else(|e| panic!("{case}: {e}"));
+                assert_eq!(login.subject, string(expect, "subject"), "{case}");
+            } else {
+                let err = result.expect_err("expected totp failure");
+                assert_eq!(err.code(), string(expect, "error"), "{case}");
+            }
+        }
+        other => panic!("{case}: unknown action {other}"),
     }
 }
 

@@ -272,6 +272,91 @@ fn now_unix() -> i64 {
         .as_secs() as i64
 }
 
+#[tokio::test]
+async fn password_then_totp_issues_code() {
+    use oauth::totp;
+
+    let state = AppState::demo();
+    let app = app(state.clone());
+
+    let enroll = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/enroll/totp")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("username=alice&password=password"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(enroll.status(), StatusCode::OK);
+    let enroll_body = body_string(enroll).await;
+    let secret_b32 = json_string_field(&enroll_body, "secret").expect("secret");
+    let secret = totp::decode_base32(&secret_b32).unwrap();
+    let code = totp::generate_code(&secret, now_unix());
+
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let challenge = pkce::challenge_s256(verifier).unwrap();
+    let authorize_uri = format!(
+        "/authorize?response_type=code&client_id=spa&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state=mfa",
+        urlencoding_encode("https://app.example/cb"),
+        urlencoding_encode(&challenge),
+    );
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&authorize_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = cookie_from(&res);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("username=alice&password=password"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(res.headers().get(header::LOCATION).unwrap(), "/login/mfa");
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login/mfa")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("code={code}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let location = res
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(location.starts_with("https://app.example/cb?"));
+    assert!(query_param(&location, "code").is_some());
+}
+
 fn query_param(url: &str, name: &str) -> Option<String> {
     let q = url.split_once('?')?.1;
     for pair in q.split('&') {

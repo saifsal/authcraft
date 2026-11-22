@@ -21,6 +21,7 @@ use crate::par::{ParRecord, ParStore, DEFAULT_PAR_TTL_SECS};
 use crate::pkce::{self, require_s256_method};
 use crate::refresh::{RefreshStore, DEFAULT_REFRESH_TOKEN_TTL_SECS};
 use crate::token::{self, TokenClaims, DEFAULT_ACCESS_TOKEN_TTL_SECS};
+use crate::totp;
 use crate::users::{AuthnError, UserRecord, UserStore};
 
 /// Server configuration shared by the library and HTTP binder.
@@ -54,6 +55,13 @@ impl ServerConfig {
 pub struct ParSuccess {
     pub request_uri: String,
     pub expires_in: i64,
+}
+
+/// TOTP enrollment material (shown once).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TotpEnrollment {
+    pub secret_b32: String,
+    pub otpauth_uri: String,
 }
 
 /// Validated authorize request awaiting resource-owner authentication.
@@ -243,6 +251,58 @@ impl AuthorizationServer {
             .get(username.trim())
             .map(UserRecord::mfa_enrolled)
             .unwrap_or(false)
+    }
+
+    /// Whether TOTP is enrolled for `username`.
+    pub fn user_totp_enrolled(&self, username: &str) -> bool {
+        self.users
+            .lock()
+            .expect("users lock")
+            .totp_secret(username)
+            .is_some()
+    }
+
+    /// Enroll TOTP for an existing user; returns base32 secret and otpauth URI.
+    pub fn enroll_totp(
+        &self,
+        username: &str,
+        issuer: &str,
+    ) -> Result<TotpEnrollment, AuthnError> {
+        let secret = totp::generate_secret()?;
+        let secret_b32 = totp::encode_base32(&secret);
+        let otpauth_uri = totp::otpauth_uri(issuer, username.trim(), &secret_b32);
+        self.users
+            .lock()
+            .expect("users lock")
+            .set_totp_secret(username, secret_b32.clone())?;
+        Ok(TotpEnrollment {
+            secret_b32,
+            otpauth_uri,
+        })
+    }
+
+    /// Set a known TOTP secret (tests / vectors).
+    pub fn set_totp_secret(&self, username: &str, secret_b32: &str) -> Result<(), AuthnError> {
+        self.users
+            .lock()
+            .expect("users lock")
+            .set_totp_secret(username, secret_b32.to_owned())
+    }
+
+    /// Verify a TOTP code for `username` at `now`.
+    pub fn verify_totp(&self, username: &str, code: &str, now: i64) -> Result<(), AuthnError> {
+        let secret_b32 = self
+            .users
+            .lock()
+            .expect("users lock")
+            .totp_secret(username)
+            .ok_or(AuthnError::InvalidMfa)?;
+        let secret = totp::decode_base32(&secret_b32)?;
+        if totp::verify_code(&secret, code, now) {
+            Ok(())
+        } else {
+            Err(AuthnError::InvalidMfa)
+        }
     }
 
     pub fn public_key(&self) -> PublicKey {

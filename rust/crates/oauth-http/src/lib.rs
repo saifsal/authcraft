@@ -14,16 +14,24 @@ use axum::{Json, Router};
 use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, OAuthError, PendingAuthorization, ServerConfig,
-    TokenRequest, TokenTypeHint,
+    AuthorizationServer, AuthorizeRequest, Client, LoginSubject, OAuthError, PendingAuthorization,
+    ServerConfig, TokenRequest, TokenTypeHint,
 };
 use serde::Deserialize;
+
+/// Password accepted; waiting for second factor before `finish_authorize`.
+#[derive(Debug, Clone)]
+struct MfaPending {
+    username: String,
+    login: LoginSubject,
+}
 
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
     pub server: Arc<AuthorizationServer>,
     pending: Arc<Mutex<HashMap<String, PendingAuthorization>>>,
+    mfa_pending: Arc<Mutex<HashMap<String, MfaPending>>>,
 }
 
 impl AppState {
@@ -31,6 +39,7 @@ impl AppState {
         Self {
             server: Arc::new(AuthorizationServer::new(config, clients, signing)),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            mfa_pending: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -63,6 +72,8 @@ pub fn app(state: AppState) -> Router {
         .route("/authorize", get(authorize))
         .route("/par", post(par))
         .route("/login", get(login_get).post(login_post))
+        .route("/login/mfa", get(mfa_get).post(mfa_post))
+        .route("/enroll/totp", post(enroll_totp))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo))
         .route("/revoke", post(revoke))
@@ -220,6 +231,18 @@ fn cookie_ticket(headers: &HeaderMap) -> Option<String> {
     None
 }
 
+fn redirect_with_code(success: &oauth::AuthorizationSuccess) -> Response {
+    let mut url = url::Url::parse(&success.redirect_uri).expect("validated redirect_uri");
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("code", &success.code);
+        if let Some(state_param) = &success.state {
+            q.append_pair("state", state_param);
+        }
+    }
+    Redirect::to(url.as_str()).into_response()
+}
+
 async fn login_post(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -228,17 +251,18 @@ async fn login_post(
     let Some(ticket) = cookie_ticket(&headers) else {
         return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
     };
-    let pending = {
+    let has_pending = {
         let map = state.pending.lock().expect("pending lock");
-        map.get(&ticket).cloned()
+        map.contains_key(&ticket)
     };
-    let Some(pending) = pending else {
+    if !has_pending {
         return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
-    };
+    }
 
+    let username = form.username.trim().to_owned();
     let login = match state
         .server
-        .authenticate_password(form.username.trim(), &form.password)
+        .authenticate_password(&username, &form.password)
     {
         Ok(login) => login,
         Err(_) => {
@@ -247,24 +271,133 @@ async fn login_post(
         }
     };
 
-    {
-        let mut map = state.pending.lock().expect("pending lock");
-        map.remove(&ticket);
+    if state.server.user_mfa_enrolled(&username) {
+        state.mfa_pending.lock().expect("mfa lock").insert(
+            ticket,
+            MfaPending {
+                username,
+                login,
+            },
+        );
+        return Redirect::to("/login/mfa").into_response();
     }
 
+    let pending = {
+        let mut map = state.pending.lock().expect("pending lock");
+        map.remove(&ticket)
+    };
+    let Some(pending) = pending else {
+        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
+    };
+
     match state.server.finish_authorize(pending, &login, now_unix()) {
-        Ok(success) => {
-            let mut url = url::Url::parse(&success.redirect_uri).expect("validated redirect_uri");
-            {
-                let mut q = url.query_pairs_mut();
-                q.append_pair("code", &success.code);
-                if let Some(state_param) = &success.state {
-                    q.append_pair("state", state_param);
-                }
-            }
-            Redirect::to(url.as_str()).into_response()
-        }
+        Ok(success) => redirect_with_code(&success),
         Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
+    }
+}
+
+fn mfa_page(error: Option<&str>) -> Html<String> {
+    let err = error
+        .map(|e| format!("<p style=\"color:red\">{e}</p>"))
+        .unwrap_or_default();
+    Html(format!(
+        r#"<!doctype html>
+<html><head><title>authcraft MFA</title></head>
+<body>
+  <h1>Two-factor authentication</h1>
+  <p>Enter the TOTP code from your authenticator (ADR 0010).</p>
+  {err}
+  <form method="post" action="/login/mfa">
+    <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" /></label>
+    <button type="submit">Verify</button>
+  </form>
+</body></html>"#
+    ))
+}
+
+async fn mfa_get() -> Html<String> {
+    mfa_page(None)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MfaForm {
+    pub code: String,
+}
+
+async fn mfa_post(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<MfaForm>,
+) -> Response {
+    let Some(ticket) = cookie_ticket(&headers) else {
+        return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
+    };
+    let mfa = {
+        let map = state.mfa_pending.lock().expect("mfa lock");
+        map.get(&ticket).cloned()
+    };
+    let Some(mfa) = mfa else {
+        return (StatusCode::BAD_REQUEST, "no MFA session").into_response();
+    };
+
+    if state
+        .server
+        .verify_totp(&mfa.username, &form.code, now_unix())
+        .is_err()
+    {
+        return (StatusCode::UNAUTHORIZED, mfa_page(Some("Invalid code"))).into_response();
+    }
+
+    state.mfa_pending.lock().expect("mfa lock").remove(&ticket);
+    let pending = {
+        let mut map = state.pending.lock().expect("pending lock");
+        map.remove(&ticket)
+    };
+    let Some(pending) = pending else {
+        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
+    };
+
+    match state
+        .server
+        .finish_authorize(pending, &mfa.login, now_unix())
+    {
+        Ok(success) => redirect_with_code(&success),
+        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnrollTotpForm {
+    pub username: String,
+    pub password: String,
+}
+
+async fn enroll_totp(State(state): State<AppState>, Form(form): Form<EnrollTotpForm>) -> Response {
+    if state
+        .server
+        .authenticate_password(form.username.trim(), &form.password)
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "invalid_credentials" })),
+        )
+            .into_response();
+    }
+    match state
+        .server
+        .enroll_totp(form.username.trim(), &state.server.config.issuer)
+    {
+        Ok(enroll) => Json(serde_json::json!({
+            "secret": enroll.secret_b32,
+            "otpauth_uri": enroll.otpauth_uri,
+        }))
+        .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
     }
 }
 

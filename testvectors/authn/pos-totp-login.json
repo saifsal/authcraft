@@ -1,0 +1,18 @@
+{
+  "id": "pos-totp-login",
+  "source": "generated",
+  "description": "Password then valid TOTP succeeds.",
+  "steps": {
+    "action": "totp",
+    "username": "alice",
+    "password": "password",
+    "seed_password": "password",
+    "subject": "alice",
+    "totp_secret": "JBSWY3DPEHPK3PXP",
+    "now": 1111111111
+  },
+  "expect": {
+    "ok": true,
+    "subject": "alice"
+  }
+}

@@ -26,7 +26,18 @@ passwords, then optional second factors.
 
 ## Amendments
 
-### B2 — TOTP (pending)
+### B2 — TOTP
+
+1. RFC 6238 TOTP: HMAC-SHA1, 6 digits, 30-second step, ±1 step skew.
+   Implemented in `oauth::totp` with `ring` (no external TOTP crate).
+2. `enroll_totp(username, issuer)` stores a base32 secret and returns
+   `secret_b32` + `otpauth_uri` once.
+3. HTTP `POST /enroll/totp` requires username + password.
+4. After password success, if any MFA is enrolled, HTTP redirects to
+   `/login/mfa` and keeps the authorize ticket. `POST /login/mfa` with
+   `code` must verify TOTP before `finish_authorize`.
+5. Shared vectors under `testvectors/authn/` cover good TOTP, wrong code,
+   and out-of-window skew.
 
 ### B3 — WebAuthn (pending)
 

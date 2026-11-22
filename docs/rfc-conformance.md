@@ -98,6 +98,7 @@ Profile: [ADR 0010](adr/0010-authentication.md). Narrative: [oauth-m5.md](oauth-
 | Specification | In-scope behavior | Evidence |
 |---|---|---|
 | Argon2id passwords | `UserStore` + `authenticate_password`; demo `alice` | `testvectors/authn/` + `oauth::users` |
+| RFC 6238 TOTP | Enroll + required MFA when enrolled; ±1 step | `testvectors/authn/` + `oauth::totp` |
 
 ## Other RFCs referenced by the project
 

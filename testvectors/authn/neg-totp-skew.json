@@ -1,0 +1,20 @@
+{
+  "id": "neg-totp-skew",
+  "source": "generated",
+  "description": "TOTP code from far outside the ±1 step window is rejected.",
+  "steps": {
+    "action": "totp",
+    "username": "alice",
+    "password": "password",
+    "seed_password": "password",
+    "subject": "alice",
+    "totp_secret": "JBSWY3DPEHPK3PXP",
+    "code_at": 1111111111,
+    "now": 1111111111,
+    "verify_at": 1111111411
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_mfa"
+  }
+}

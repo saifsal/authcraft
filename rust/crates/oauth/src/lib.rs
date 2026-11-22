@@ -16,6 +16,7 @@ pub mod pkce;
 pub mod refresh;
 pub mod server;
 pub mod token;
+pub mod totp;
 pub mod users;
 
 pub use client::{Client, ClientRegistry};
@@ -24,8 +25,6 @@ pub use id_token::{at_hash_eddsa, scope_has_openid};
 pub use server::{
     AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, Introspection, LoginSubject,
     ParSuccess, PendingAuthorization, ServerConfig, TokenRequest, TokenSuccess, TokenTypeHint,
-    UserInfo,
+    TotpEnrollment, UserInfo,
 };
-pub use users::{
-    hash_password, AuthnError, UserRecord, UserStore, DEMO_ALICE_PASSWORD,
-};
+pub use users::{hash_password, AuthnError, UserRecord, UserStore, DEMO_ALICE_PASSWORD};

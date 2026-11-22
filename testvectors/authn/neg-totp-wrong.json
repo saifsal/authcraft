@@ -1,0 +1,19 @@
+{
+  "id": "neg-totp-wrong",
+  "source": "generated",
+  "description": "Wrong TOTP code yields invalid_mfa.",
+  "steps": {
+    "action": "totp",
+    "username": "alice",
+    "password": "password",
+    "seed_password": "password",
+    "subject": "alice",
+    "totp_secret": "JBSWY3DPEHPK3PXP",
+    "code": "000000",
+    "now": 1111111111
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_mfa"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "neg-admin-bad-token",
+  "source": "generated",
+  "description": "Wrong admin bearer is rejected.",
+  "steps": {
+    "action": "list_clients",
+    "admin_token": "wrong-token"
+  },
+  "expect": {
+    "ok": false,
+    "error": "unauthorized"
+  }
+}

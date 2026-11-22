@@ -15,7 +15,7 @@ use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
     AuthorizationServer, AuthorizeRequest, Client, LoginSubject, OAuthError, PendingAuthorization,
-    ServerConfig, TokenRequest, TokenTypeHint,
+    ServerConfig, TokenRequest, TokenTypeHint, DEMO_ADMIN_TOKEN,
 };
 use serde::Deserialize;
 
@@ -45,16 +45,17 @@ impl AppState {
 
     pub fn demo() -> Self {
         let key = generate_signing_key(Alg::EdDSA).expect("generate EdDSA key");
+        let mut config = ServerConfig::new("http://localhost:8089", "api");
+        config.admin_token = DEMO_ADMIN_TOKEN.into();
         let state = Self::new(
-            // localhost (not 127.0.0.1) so WebAuthn RP checks accept the demo origin.
-            ServerConfig::new("http://localhost:8089", "api"),
-            vec![Client {
-                client_id: "spa".into(),
-                redirect_uris: vec![
+            config,
+            vec![Client::new(
+                "spa",
+                vec![
                     "http://127.0.0.1:9999/cb".into(),
                     "https://app.example/cb".into(),
                 ],
-            }],
+            )],
             key,
         );
         state.server.seed_demo_users();
@@ -83,7 +84,139 @@ pub fn app(state: AppState) -> Router {
         .route("/userinfo", get(userinfo))
         .route("/revoke", post(revoke))
         .route("/introspect", post(introspect))
+        .route("/admin/clients", get(admin_list_clients).post(admin_create_client))
+        .route("/admin/clients/{client_id}", axum::routing::delete(admin_delete_client))
+        .route("/admin/users", get(admin_list_users))
         .with_state(state)
+}
+
+fn admin_bearer(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    value.strip_prefix("Bearer ")
+}
+
+fn admin_unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "unauthorized" })),
+    )
+        .into_response()
+}
+
+async fn admin_list_clients(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    match state.server.list_clients(admin_bearer(&headers)) {
+        Ok(clients) => {
+            let body: Vec<_> = clients
+                .into_iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "client_id": c.client_id,
+                        "redirect_uris": c.redirect_uris,
+                        "client_name": c.client_name,
+                    })
+                })
+                .collect();
+            Json(body).into_response()
+        }
+        Err(oauth::AdminError::Unauthorized) => admin_unauthorized(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminCreateClientBody {
+    pub client_id: String,
+    pub redirect_uris: Vec<String>,
+    pub client_name: Option<String>,
+}
+
+async fn admin_create_client(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AdminCreateClientBody>,
+) -> Response {
+    let client = Client {
+        client_id: body.client_id,
+        redirect_uris: body.redirect_uris,
+        client_name: body.client_name,
+    };
+    match state.server.create_client(admin_bearer(&headers), client) {
+        Ok(c) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "client_id": c.client_id,
+                "redirect_uris": c.redirect_uris,
+                "client_name": c.client_name,
+            })),
+        )
+            .into_response(),
+        Err(oauth::AdminError::Unauthorized) => admin_unauthorized(),
+        Err(oauth::AdminError::Conflict) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "conflict" })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn admin_delete_client(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(client_id): axum::extract::Path<String>,
+) -> Response {
+    match state
+        .server
+        .delete_client(admin_bearer(&headers), &client_id)
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(oauth::AdminError::Unauthorized) => admin_unauthorized(),
+        Err(oauth::AdminError::NotFound) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "not_found" })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn admin_list_users(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    match state.server.list_users(admin_bearer(&headers)) {
+        Ok(users) => {
+            let body: Vec<_> = users
+                .into_iter()
+                .map(|u| {
+                    serde_json::json!({
+                        "username": u.username,
+                        "subject": u.subject,
+                        "name": u.name,
+                        "email": u.email,
+                        "totp_enrolled": u.totp_enrolled,
+                        "webauthn_enrolled": u.webauthn_enrolled,
+                    })
+                })
+                .collect();
+            Json(body).into_response()
+        }
+        Err(oauth::AdminError::Unauthorized) => admin_unauthorized(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
+    }
 }
 
 fn now_unix() -> i64 {

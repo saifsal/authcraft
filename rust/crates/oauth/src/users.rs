@@ -105,6 +105,18 @@ impl UserStore {
         self.users.get_mut(username)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &UserRecord)> {
+        self.users.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.users.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.users.is_empty()
+    }
+
     /// Seeds demo user `alice` with [`DEMO_ALICE_PASSWORD`].
     pub fn seed_demo_alice(&mut self) {
         let hash = hash_password(DEMO_ALICE_PASSWORD).expect("hash demo password");

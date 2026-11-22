@@ -39,11 +39,16 @@ pub struct ServerConfig {
     pub refresh_token_ttl_secs: i64,
     pub verify_grace_secs: i64,
     pub par_ttl_secs: i64,
-    /// WebAuthn RP ID (e.g. `127.0.0.1`).
+    /// WebAuthn RP ID (e.g. `localhost`).
     pub rp_id: String,
-    /// WebAuthn RP origin (e.g. `http://127.0.0.1:8089`).
+    /// WebAuthn RP origin (e.g. `http://localhost:8089`).
     pub rp_origin: String,
+    /// Bearer token for `/admin` and SCIM (ADR 0011). Empty disables admin.
+    pub admin_token: String,
 }
+
+/// Published demo admin bearer token (educational only).
+pub const DEMO_ADMIN_TOKEN: &str = "authcraft-admin-token";
 
 impl ServerConfig {
     pub fn new(issuer: impl Into<String>, audience: impl Into<String>) -> Self {
@@ -63,6 +68,7 @@ impl ServerConfig {
             par_ttl_secs: DEFAULT_PAR_TTL_SECS,
             rp_id,
             rp_origin,
+            admin_token: String::new(),
         }
     }
 }
@@ -206,10 +212,49 @@ impl TokenTypeHint {
     }
 }
 
+/// Admin / control-plane errors (ADR 0011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdminError {
+    Unauthorized,
+    NotFound,
+    Conflict,
+    InvalidRequest,
+}
+
+impl AdminError {
+    pub fn code(self) -> &'static str {
+        match self {
+            AdminError::Unauthorized => "unauthorized",
+            AdminError::NotFound => "not_found",
+            AdminError::Conflict => "conflict",
+            AdminError::InvalidRequest => "invalid_request",
+        }
+    }
+}
+
+impl std::fmt::Display for AdminError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.code())
+    }
+}
+
+impl std::error::Error for AdminError {}
+
+/// Public user summary for admin listing (no secrets).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserSummary {
+    pub username: String,
+    pub subject: String,
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub totp_enrolled: bool,
+    pub webauthn_enrolled: bool,
+}
+
 /// In-memory authorization server.
 pub struct AuthorizationServer {
     pub config: ServerConfig,
-    pub clients: ClientRegistry,
+    clients: Mutex<ClientRegistry>,
     codes: Mutex<CodeStore>,
     refresh: Mutex<RefreshStore>,
     denylist: Mutex<JtiDenylist>,
@@ -227,7 +272,7 @@ impl AuthorizationServer {
             .expect("webauthn rp configuration");
         Self {
             config,
-            clients: ClientRegistry::new(clients),
+            clients: Mutex::new(ClientRegistry::new(clients)),
             codes: Mutex::new(CodeStore::new()),
             refresh: Mutex::new(RefreshStore::new()),
             denylist: Mutex::new(JtiDenylist::new()),
@@ -237,6 +282,79 @@ impl AuthorizationServer {
             users: Mutex::new(UserStore::new()),
             webauthn,
         }
+    }
+
+    fn require_admin(&self, token: Option<&str>) -> Result<(), AdminError> {
+        let expected = self.config.admin_token.as_str();
+        if expected.is_empty() {
+            return Err(AdminError::Unauthorized);
+        }
+        match token {
+            Some(t) if t == expected => Ok(()),
+            _ => Err(AdminError::Unauthorized),
+        }
+    }
+
+    fn lookup_client(&self, client_id: &str) -> Result<Client, OAuthError> {
+        self.clients
+            .lock()
+            .expect("clients lock")
+            .get(client_id)
+            .cloned()
+    }
+
+    /// List registered clients (admin).
+    pub fn list_clients(&self, admin_token: Option<&str>) -> Result<Vec<Client>, AdminError> {
+        self.require_admin(admin_token)?;
+        Ok(self.clients.lock().expect("clients lock").list().to_vec())
+    }
+
+    /// Create a public client (admin).
+    pub fn create_client(
+        &self,
+        admin_token: Option<&str>,
+        client: Client,
+    ) -> Result<Client, AdminError> {
+        self.require_admin(admin_token)?;
+        if client.client_id.trim().is_empty() || client.redirect_uris.is_empty() {
+            return Err(AdminError::InvalidRequest);
+        }
+        let mut reg = self.clients.lock().expect("clients lock");
+        if !reg.insert(client.clone()) {
+            return Err(AdminError::Conflict);
+        }
+        Ok(client)
+    }
+
+    /// Delete a client by id (admin).
+    pub fn delete_client(
+        &self,
+        admin_token: Option<&str>,
+        client_id: &str,
+    ) -> Result<(), AdminError> {
+        self.require_admin(admin_token)?;
+        if self.clients.lock().expect("clients lock").remove(client_id) {
+            Ok(())
+        } else {
+            Err(AdminError::NotFound)
+        }
+    }
+
+    /// List users without password material (admin).
+    pub fn list_users(&self, admin_token: Option<&str>) -> Result<Vec<UserSummary>, AdminError> {
+        self.require_admin(admin_token)?;
+        let users = self.users.lock().expect("users lock");
+        Ok(users
+            .iter()
+            .map(|(username, u)| UserSummary {
+                username: username.clone(),
+                subject: u.subject.clone(),
+                name: u.name.clone(),
+                email: u.email.clone(),
+                totp_enrolled: u.totp_secret.is_some(),
+                webauthn_enrolled: u.webauthn_enrolled(),
+            })
+            .collect())
     }
 
     /// Insert or replace a user account (ADR 0010).
@@ -591,7 +709,7 @@ impl AuthorizationServer {
         if req.code_challenge.is_empty() {
             return Err(OAuthError::InvalidRequest);
         }
-        let client = self.clients.get(&req.client_id)?;
+        let client = self.lookup_client(&req.client_id)?;
         if !client.allows_redirect(&req.redirect_uri) {
             return Err(OAuthError::InvalidRequest);
         }
@@ -674,7 +792,7 @@ impl AuthorizationServer {
         dpop_proof: Option<&str>,
         token_htu: &str,
     ) -> Result<TokenSuccess, OAuthError> {
-        self.clients.get(&req.client_id)?;
+        self.lookup_client(&req.client_id)?;
 
         let mut store = self.codes.lock().map_err(|_| OAuthError::ServerError)?;
         let record = store.redeem(&req.code, now)?;
@@ -749,7 +867,7 @@ impl AuthorizationServer {
         dpop_proof: Option<&str>,
         token_htu: &str,
     ) -> Result<TokenSuccess, OAuthError> {
-        self.clients.get(&req.client_id)?;
+        self.lookup_client(&req.client_id)?;
         if req.refresh_token.is_empty() {
             return Err(OAuthError::InvalidRequest);
         }
@@ -828,7 +946,7 @@ impl AuthorizationServer {
         client_id: &str,
         now: i64,
     ) -> Result<(), OAuthError> {
-        let _ = self.clients.get(client_id)?;
+        let _ = self.lookup_client(client_id)?;
         if token.is_empty() {
             return Ok(());
         }
@@ -937,10 +1055,7 @@ mod tests {
         let key = generate_signing_key(Alg::EdDSA).unwrap();
         AuthorizationServer::new(
             ServerConfig::new("https://auth.example", "api"),
-            vec![Client {
-                client_id: "spa".into(),
-                redirect_uris: vec!["https://app.example/cb".into()],
-            }],
+            vec![Client::new("spa", vec!["https://app.example/cb".into()])],
             key,
         )
     }
@@ -1392,10 +1507,7 @@ mod tests {
         let key = generate_signing_key(Alg::EdDSA).unwrap();
         let short = AuthorizationServer::new(
             cfg,
-            vec![Client {
-                client_id: "spa".into(),
-                redirect_uris: vec!["https://app.example/cb".into()],
-            }],
+            vec![Client::new("spa", vec!["https://app.example/cb".into()])],
             key,
         );
         let v = "c".repeat(43);

@@ -15,7 +15,7 @@ use oauth::pkce;
 use oauth::totp;
 use oauth::{
     hash_password, AuthorizationServer, AuthorizeRequest, Client, LoginSubject, ServerConfig,
-    TokenRequest, UserRecord,
+    TokenRequest, UserRecord, DEMO_ADMIN_TOKEN,
 };
 
 fn oauth_vectors_dir() -> PathBuf {
@@ -40,6 +40,10 @@ fn dpop_vectors_dir() -> PathBuf {
 
 fn authn_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/authn")
+}
+
+fn admin_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/admin")
 }
 
 fn make_dpop_proof(htm: &str, htu: &str, iat: i64, jti: &str, pkcs8: &[u8], public: &PublicKey) -> String {
@@ -84,12 +88,11 @@ fn bool_field(v: &Value, name: &str) -> bool {
 
 fn make_server() -> AuthorizationServer {
     let key = generate_signing_key(Alg::EdDSA).expect("key");
+    let mut cfg = ServerConfig::new("https://auth.example", "api");
+    cfg.admin_token = DEMO_ADMIN_TOKEN.into();
     AuthorizationServer::new(
-        ServerConfig::new("https://auth.example", "api"),
-        vec![Client {
-            client_id: "spa".into(),
-            redirect_uris: vec!["https://app.example/cb".into()],
-        }],
+        cfg,
+        vec![Client::new("spa", vec!["https://app.example/cb".into()])],
         key,
     )
 }
@@ -797,5 +800,91 @@ fn authn_shared_vectors() {
     assert!(!files.is_empty(), "no authn vectors");
     for f in files {
         run_authn_vector(&f);
+    }
+}
+
+fn run_admin_vector(path: &Path) {
+    let raw = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let root = json::parse(raw.as_bytes()).unwrap_or_else(|e| panic!("json {}: {e}", path.display()));
+    let case = string(&root, "id");
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+    let srv = make_server();
+    let token = optional_string(steps, "admin_token");
+
+    match optional_string(steps, "action").unwrap_or("list_clients") {
+        "list_clients" => {
+            let result = srv.list_clients(token);
+            if bool_field(expect, "ok") {
+                result.unwrap_or_else(|e| panic!("{case}: {e}"));
+            } else {
+                let err = result.expect_err("expected admin failure");
+                assert_eq!(err.code(), string(expect, "error"), "{case}");
+            }
+        }
+        "create_then_exchange" => {
+            let client_id = string(steps, "client_id");
+            let redirect_uri = string(steps, "redirect_uri");
+            srv.create_client(
+                token,
+                Client {
+                    client_id: client_id.into(),
+                    redirect_uris: vec![redirect_uri.into()],
+                    client_name: optional_string(steps, "client_name").map(str::to_owned),
+                },
+            )
+            .unwrap_or_else(|e| panic!("{case}: {e}"));
+
+            let verifier = string(steps, "code_verifier");
+            let challenge = string(steps, "code_challenge");
+            let now_auth = integer(steps, "now_authorize");
+            let now_token = integer(steps, "now_token");
+            let pending = srv
+                .begin_authorize(
+                    &AuthorizeRequest {
+                        response_type: "code".into(),
+                        client_id: client_id.into(),
+                        redirect_uri: redirect_uri.into(),
+                        code_challenge: challenge.into(),
+                        code_challenge_method: "S256".into(),
+                        state: None,
+                        scope: Some("read".into()),
+                        nonce: None,
+                        request_uri: None,
+                    },
+                    now_auth,
+                )
+                .unwrap();
+            let issued = srv
+                .finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
+                .unwrap();
+            let tok = srv
+                .exchange_token(
+                    &TokenRequest {
+                        grant_type: "authorization_code".into(),
+                        code: issued.code,
+                        redirect_uri: redirect_uri.into(),
+                        client_id: client_id.into(),
+                        code_verifier: verifier.into(),
+                        refresh_token: String::new(),
+                    },
+                    now_token,
+                    None,
+                    "",
+                )
+                .unwrap();
+            assert!(!tok.access_token.is_empty(), "{case}");
+            assert!(bool_field(expect, "ok"), "{case}");
+        }
+        other => panic!("{case}: unknown action {other}"),
+    }
+}
+
+#[test]
+fn admin_shared_vectors() {
+    let files = load_json_vectors(&admin_vectors_dir());
+    assert!(!files.is_empty(), "no admin vectors");
+    for f in files {
+        run_admin_vector(&f);
     }
 }

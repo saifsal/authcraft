@@ -1,0 +1,20 @@
+{
+  "id": "pos-admin-create-client",
+  "source": "generated",
+  "description": "Admin creates a client then authorization-code exchange succeeds.",
+  "steps": {
+    "action": "create_then_exchange",
+    "admin_token": "authcraft-admin-token",
+    "client_id": "app2",
+    "redirect_uri": "https://app2.example/cb",
+    "client_name": "App Two",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001
+  },
+  "expect": {
+    "ok": true
+  }
+}

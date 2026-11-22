@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://authcraft.local/testvectors/admin/schema.json",
+  "title": "authcraft M6 admin vector",
+  "type": "object",
+  "required": ["id", "source", "description", "steps", "expect"],
+  "properties": {
+    "id": { "type": "string" },
+    "source": { "type": "string" },
+    "description": { "type": "string" },
+    "steps": { "type": "object" },
+    "expect": { "type": "object" }
+  }
+}

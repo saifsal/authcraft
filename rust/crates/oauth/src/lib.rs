@@ -24,8 +24,8 @@ pub use client::{Client, ClientRegistry};
 pub use error::OAuthError;
 pub use id_token::{at_hash_eddsa, scope_has_openid};
 pub use server::{
-    AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, Introspection, LoginSubject,
-    ParSuccess, PendingAuthorization, ServerConfig, TokenRequest, TokenSuccess, TokenTypeHint,
-    TotpEnrollment, UserInfo,
+    AdminError, AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, Introspection,
+    LoginSubject, ParSuccess, PendingAuthorization, ServerConfig, TokenRequest, TokenSuccess,
+    TokenTypeHint, TotpEnrollment, UserInfo, UserSummary, DEMO_ADMIN_TOKEN,
 };
 pub use users::{hash_password, AuthnError, UserRecord, UserStore, DEMO_ALICE_PASSWORD};

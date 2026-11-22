@@ -135,10 +135,7 @@ mod tests {
         let key = generate_signing_key(Alg::EdDSA).unwrap();
         let srv = AuthorizationServer::new(
             ServerConfig::new("http://localhost:8089", "api"),
-            vec![Client {
-                client_id: "spa".into(),
-                redirect_uris: vec!["https://app.example/cb".into()],
-            }],
+            vec![Client::new("spa", vec!["https://app.example/cb".into()])],
             key,
         );
         srv.upsert_user(

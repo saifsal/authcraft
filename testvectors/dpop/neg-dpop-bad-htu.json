@@ -1,0 +1,15 @@
+{
+  "id": "neg-dpop-bad-htu",
+  "source": "RFC 9449 / ADR 0009",
+  "description": "DPoP proof with wrong htu is invalid_request.",
+  "steps": {
+    "action": "dpop_bad_htu",
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001
+  },
+  "expect": { "ok": false, "error": "invalid_request" }
+}

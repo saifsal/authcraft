@@ -13,6 +13,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use crate::client::{Client, ClientRegistry};
 use crate::code::{AuthorizationCode, CodeStore, DEFAULT_CODE_TTL_SECS};
 use crate::denylist::JtiDenylist;
+use crate::dpop::{self, DpopJtiCache};
 use crate::error::OAuthError;
 use crate::id_token::{self, IdTokenClaims};
 use crate::keyring::{Keyring, DEFAULT_VERIFY_GRACE_SECS};
@@ -188,6 +189,7 @@ pub struct AuthorizationServer {
     denylist: Mutex<JtiDenylist>,
     keys: Mutex<Keyring>,
     par: Mutex<ParStore>,
+    dpop_jtis: Mutex<DpopJtiCache>,
 }
 
 impl AuthorizationServer {
@@ -201,6 +203,7 @@ impl AuthorizationServer {
             denylist: Mutex::new(JtiDenylist::new()),
             keys: Mutex::new(Keyring::from_signing_key(signing, grace)),
             par: Mutex::new(ParStore::new()),
+            dpop_jtis: Mutex::new(DpopJtiCache::new()),
         }
     }
 
@@ -235,7 +238,7 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":false,"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"scopes_supported":["openid","profile","email"]}}"#
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":false,"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"scopes_supported":["openid","profile","email"]}}"#
         )
     }
 
@@ -285,6 +288,7 @@ impl AuthorizationServer {
         scope: Option<&str>,
         name: Option<&str>,
         email: Option<&str>,
+        cnf_jkt: Option<&str>,
         now: i64,
     ) -> Result<(String, i64), OAuthError> {
         let exp = now.saturating_add(self.config.access_token_ttl_secs);
@@ -303,11 +307,26 @@ impl AuthorizationServer {
                 scope,
                 name,
                 email,
+                cnf_jkt,
                 iat: now,
                 exp,
             },
         )?;
         Ok((access_token, exp))
+    }
+
+    fn resolve_dpop(
+        &self,
+        dpop_proof: Option<&str>,
+        htu: &str,
+        now: i64,
+    ) -> Result<Option<String>, OAuthError> {
+        let Some(proof) = dpop_proof.filter(|p| !p.is_empty()) else {
+            return Ok(None);
+        };
+        let mut cache = self.dpop_jtis.lock().map_err(|_| OAuthError::ServerError)?;
+        let verified = dpop::verify_proof(proof, "POST", htu, now, &mut cache)?;
+        Ok(Some(verified.jkt))
     }
 
     /// Pushes authorize parameters and returns a one-time `request_uri` (ADR 0009).
@@ -438,11 +457,22 @@ impl AuthorizationServer {
         })
     }
 
-    /// Exchanges an authorization code or refresh token (ADR 0008).
-    pub fn exchange_token(&self, req: &TokenRequest, now: i64) -> Result<TokenSuccess, OAuthError> {
+    /// Exchanges an authorization code or refresh token (ADR 0008 / 0009).
+    ///
+    /// `dpop_proof` is the raw `DPoP` header value; `token_htu` is the absolute
+    /// token endpoint URL (RFC 9449 `htu`).
+    pub fn exchange_token(
+        &self,
+        req: &TokenRequest,
+        now: i64,
+        dpop_proof: Option<&str>,
+        token_htu: &str,
+    ) -> Result<TokenSuccess, OAuthError> {
         match req.grant_type.as_str() {
-            "authorization_code" => self.exchange_authorization_code(req, now),
-            "refresh_token" => self.exchange_refresh_token(req, now),
+            "authorization_code" => {
+                self.exchange_authorization_code(req, now, dpop_proof, token_htu)
+            }
+            "refresh_token" => self.exchange_refresh_token(req, now, dpop_proof, token_htu),
             _ => Err(OAuthError::UnsupportedGrantType),
         }
     }
@@ -451,6 +481,8 @@ impl AuthorizationServer {
         &self,
         req: &TokenRequest,
         now: i64,
+        dpop_proof: Option<&str>,
+        token_htu: &str,
     ) -> Result<TokenSuccess, OAuthError> {
         self.clients.get(&req.client_id)?;
 
@@ -463,12 +495,16 @@ impl AuthorizationServer {
         }
         pkce::verify_s256(&req.code_verifier, &record.code_challenge)?;
 
+        let jkt = self.resolve_dpop(dpop_proof, token_htu, now)?;
+        let token_type = if jkt.is_some() { "DPoP" } else { "Bearer" };
+
         let (access_token, exp) = self.mint_access(
             &record.subject,
             &record.client_id,
             record.scope.as_deref(),
             record.name.as_deref(),
             record.email.as_deref(),
+            jkt.as_deref(),
             now,
         )?;
 
@@ -509,7 +545,7 @@ impl AuthorizationServer {
 
         Ok(TokenSuccess {
             access_token,
-            token_type: "Bearer",
+            token_type,
             expires_in: self.config.access_token_ttl_secs,
             id_token,
             refresh_token: Some(refresh_token),
@@ -520,6 +556,8 @@ impl AuthorizationServer {
         &self,
         req: &TokenRequest,
         now: i64,
+        dpop_proof: Option<&str>,
+        token_htu: &str,
     ) -> Result<TokenSuccess, OAuthError> {
         self.clients.get(&req.client_id)?;
         if req.refresh_token.is_empty() {
@@ -532,27 +570,53 @@ impl AuthorizationServer {
             store.rotate(&req.refresh_token, &req.client_id, now, refresh_exp)?;
         drop(store);
 
+        let jkt = self.resolve_dpop(dpop_proof, token_htu, now)?;
+        let token_type = if jkt.is_some() { "DPoP" } else { "Bearer" };
+
         let (access_token, _) = self.mint_access(
             &record.subject,
             &record.client_id,
             record.scope.as_deref(),
             record.name.as_deref(),
             record.email.as_deref(),
+            jkt.as_deref(),
             now,
         )?;
 
         Ok(TokenSuccess {
             access_token,
-            token_type: "Bearer",
+            token_type,
             expires_in: self.config.access_token_ttl_secs,
             id_token: None,
             refresh_token: Some(refresh_token),
         })
     }
 
-    /// Verifies a Bearer access token and returns UserInfo claims (ADR 0006 / 0008).
-    pub fn userinfo(&self, access_token: &str, now: i64) -> Result<UserInfo, OAuthError> {
+    /// Verifies an access token and returns UserInfo claims (ADR 0006 / 0008 / 0009).
+    ///
+    /// When the token has `cnf.jkt`, `dpop_proof` is required and must match.
+    pub fn userinfo(
+        &self,
+        access_token: &str,
+        now: i64,
+        dpop_proof: Option<&str>,
+        userinfo_htu: &str,
+    ) -> Result<UserInfo, OAuthError> {
         let claims = self.verify_access_claims(access_token, now)?;
+        if let Some(jkt) = claims
+            .get("cnf")
+            .and_then(|c| c.get("jkt"))
+            .and_then(|v| v.as_str())
+        {
+            let proof = dpop_proof.filter(|p| !p.is_empty()).ok_or(OAuthError::InvalidToken)?;
+            let mut cache = self.dpop_jtis.lock().map_err(|_| OAuthError::ServerError)?;
+            let verified =
+                dpop::verify_proof(proof, "GET", userinfo_htu, now, &mut cache)
+                    .map_err(|_| OAuthError::InvalidToken)?;
+            if verified.jkt != jkt {
+                return Err(OAuthError::InvalidToken);
+            }
+        }
         let sub = claims
             .get("sub")
             .and_then(|v| v.as_str())
@@ -727,8 +791,7 @@ mod tests {
                     code_verifier: verifier,
                     refresh_token: String::new(),
                 },
-                1_001,
-            )
+                1_001, None, "https://auth.example/token")
             .unwrap();
         assert_eq!(token.token_type, "Bearer");
         assert_eq!(token.expires_in, DEFAULT_ACCESS_TOKEN_TTL_SECS);
@@ -792,8 +855,7 @@ mod tests {
                     code_verifier: verifier,
                     refresh_token: String::new(),
                 },
-                1_001,
-            )
+                1_001, None, "https://auth.example/token")
             .unwrap();
         let id_token = token.id_token.expect("id_token");
         assert!(token.refresh_token.is_some());
@@ -823,7 +885,7 @@ mod tests {
             Some(expected_hash.as_str())
         );
 
-        let info = srv.userinfo(&token.access_token, 1_001).unwrap();
+        let info = srv.userinfo(&token.access_token, 1_001, None, "https://auth.example/userinfo").unwrap();
         assert_eq!(info.sub, "alice");
         assert_eq!(info.name.as_deref(), Some("Alice"));
         assert_eq!(info.email.as_deref(), Some("alice@example.com"));
@@ -863,9 +925,9 @@ mod tests {
             code_verifier: verifier,
             refresh_token: String::new(),
         };
-        srv.exchange_token(&req, 1_001).unwrap();
+        srv.exchange_token(&req, 1_001, None, "https://auth.example/token").unwrap();
         assert!(matches!(
-            srv.exchange_token(&req, 1_002),
+            srv.exchange_token(&req, 1_002, None, "https://auth.example/token"),
             Err(OAuthError::InvalidGrant)
         ));
     }
@@ -889,8 +951,7 @@ mod tests {
                     code_verifier: verifier,
                     refresh_token: String::new(),
                 },
-                1_001,
-            )
+                1_001, None, "https://auth.example/token")
             .unwrap();
         let rt = first.refresh_token.expect("refresh");
         let second = srv
@@ -903,8 +964,7 @@ mod tests {
                     code_verifier: String::new(),
                     refresh_token: rt.clone(),
                 },
-                1_002,
-            )
+                1_002, None, "https://auth.example/token")
             .unwrap();
         assert!(second.refresh_token.is_some());
         assert!(second.id_token.is_none());
@@ -918,8 +978,7 @@ mod tests {
                     code_verifier: String::new(),
                     refresh_token: rt,
                 },
-                1_003,
-            ),
+                1_003, None, "https://auth.example/token"),
             Err(OAuthError::InvalidGrant)
         ));
     }
@@ -1019,8 +1078,7 @@ mod tests {
                     code_verifier: "b".repeat(43),
                     refresh_token: String::new(),
                 },
-                1_001,
-            ),
+                1_001, None, "https://auth.example/token"),
             Err(OAuthError::InvalidGrant)
         ));
     }
@@ -1044,8 +1102,7 @@ mod tests {
                     code_verifier: verifier,
                     refresh_token: String::new(),
                 },
-                1_001,
-            )
+                1_001, None, "https://auth.example/token")
             .unwrap();
         assert!(srv
             .introspect(&tok.access_token, TokenTypeHint::AccessToken, 1_001)
@@ -1063,7 +1120,7 @@ mod tests {
             .unwrap()
             .active);
         assert!(matches!(
-            srv.userinfo(&tok.access_token, 1_001),
+            srv.userinfo(&tok.access_token, 1_001, None, "https://auth.example/userinfo"),
             Err(OAuthError::InvalidToken)
         ));
     }
@@ -1087,8 +1144,7 @@ mod tests {
                     code_verifier: verifier,
                     refresh_token: String::new(),
                 },
-                1_001,
-            )
+                1_001, None, "https://auth.example/token")
             .unwrap();
         srv.rotate_signing_key(1_002).unwrap();
         let jwks = Jwks::parse(srv.jwks_document_at(1_002).as_bytes()).unwrap();
@@ -1123,8 +1179,7 @@ mod tests {
                     code_verifier: verifier2,
                     refresh_token: String::new(),
                 },
-                1_004,
-            )
+                1_004, None, "https://auth.example/token")
             .unwrap();
         verify::verify(
             second.access_token.as_bytes(),
@@ -1181,8 +1236,7 @@ mod tests {
                     code_verifier: v,
                     refresh_token: String::new(),
                 },
-                2_001,
-            )
+                2_001, None, "https://auth.example/token")
             .unwrap();
         short.rotate_signing_key(2_002).unwrap();
         let jwks_late = Jwks::parse(short.jwks_document_at(2_020).as_bytes()).unwrap();
@@ -1206,7 +1260,25 @@ mod tests {
     }
 
     #[test]
-    fn revoke_refresh_kills_family() {
+    fn dpop_token_requires_proof_at_userinfo() {
+        use jose::signing::{self, generate_signing_key as gen};
+        let dpop_key = gen(Alg::EdDSA).unwrap();
+        let jkt = dpop_key.public.thumbprint();
+        let x = match &dpop_key.public {
+            PublicKey::Ed25519 { x } => b64url::encode(x),
+            _ => panic!(),
+        };
+        let header = format!(
+            r#"{{"typ":"dpop+jwt","alg":"EdDSA","jwk":{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}}}"#
+        );
+        let payload =
+            r#"{"htm":"POST","htu":"https://auth.example/token","iat":1001,"jti":"dpop-1"}"#;
+        let enc_h = b64url::encode(header.as_bytes());
+        let enc_p = b64url::encode(payload.as_bytes());
+        let input = format!("{enc_h}.{enc_p}");
+        let sig = signing::sign(Alg::EdDSA, &dpop_key.pkcs8, input.as_bytes()).unwrap();
+        let proof = format!("{input}.{}", b64url::encode(&sig));
+
         let srv = server();
         let verifier = "a".repeat(43);
         let mut p = pending(&srv);
@@ -1225,7 +1297,59 @@ mod tests {
                     refresh_token: String::new(),
                 },
                 1_001,
+                Some(&proof),
+                "https://auth.example/token",
             )
+            .unwrap();
+        assert_eq!(tok.token_type, "DPoP");
+        assert!(matches!(
+            srv.userinfo(
+                &tok.access_token,
+                1_001,
+                None,
+                "https://auth.example/userinfo"
+            ),
+            Err(OAuthError::InvalidToken)
+        ));
+
+        let payload2 =
+            r#"{"htm":"GET","htu":"https://auth.example/userinfo","iat":1001,"jti":"dpop-2"}"#;
+        let enc_p2 = b64url::encode(payload2.as_bytes());
+        let input2 = format!("{enc_h}.{enc_p2}");
+        let sig2 = signing::sign(Alg::EdDSA, &dpop_key.pkcs8, input2.as_bytes()).unwrap();
+        let proof2 = format!("{input2}.{}", b64url::encode(&sig2));
+        let info = srv
+            .userinfo(
+                &tok.access_token,
+                1_001,
+                Some(&proof2),
+                "https://auth.example/userinfo",
+            )
+            .unwrap();
+        assert_eq!(info.sub, "alice");
+        let _ = jkt;
+    }
+
+    #[test]
+    fn revoke_refresh_kills_family() {
+        let srv = server();
+        let verifier = "a".repeat(43);
+        let mut p = pending(&srv);
+        p.code_challenge = pkce::challenge_s256(&verifier).unwrap();
+        let issued = srv
+            .finish_authorize(p, &LoginSubject::new("alice"), 1_000)
+            .unwrap();
+        let tok = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "authorization_code".into(),
+                    code: issued.code,
+                    redirect_uri: "https://app.example/cb".into(),
+                    client_id: "spa".into(),
+                    code_verifier: verifier,
+                    refresh_token: String::new(),
+                },
+                1_001, None, "https://auth.example/token")
             .unwrap();
         let rt = tok.refresh_token.unwrap();
         srv.revoke(&rt, TokenTypeHint::RefreshToken, "spa", 1_001)
@@ -1244,8 +1368,7 @@ mod tests {
                     code_verifier: String::new(),
                     refresh_token: rt,
                 },
-                1_002,
-            ),
+                1_002, None, "https://auth.example/token"),
             Err(OAuthError::InvalidGrant)
         ));
     }

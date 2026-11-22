@@ -19,6 +19,8 @@ pub struct TokenClaims<'a> {
     pub scope: Option<&'a str>,
     pub name: Option<&'a str>,
     pub email: Option<&'a str>,
+    /// RFC 9449 confirmation thumbprint when DPoP-bound.
+    pub cnf_jkt: Option<&'a str>,
     pub iat: i64,
     pub exp: i64,
 }
@@ -49,6 +51,12 @@ pub fn mint_access_token(
     }
     if let Some(email) = claims.email {
         payload.push_str(&format!(r#","email":"{}""#, json_escape(email)));
+    }
+    if let Some(jkt) = claims.cnf_jkt {
+        payload.push_str(&format!(
+            r#","cnf":{{"jkt":"{}"}}"#,
+            json_escape(jkt)
+        ));
     }
     payload.push('}');
 

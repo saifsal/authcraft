@@ -1,0 +1,15 @@
+{
+  "id": "pos-dpop-bind",
+  "source": "RFC 9449 / ADR 0009",
+  "description": "DPoP proof at token endpoint yields cnf.jkt; matching proof unlocks UserInfo.",
+  "steps": {
+    "action": "dpop_bind",
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001
+  },
+  "expect": { "ok": true, "token_type": "DPoP" }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "neg-dpop-userinfo-missing-proof",
+  "source": "RFC 9449 / ADR 0009",
+  "description": "DPoP-bound access token without proof at UserInfo is invalid_token.",
+  "steps": {
+    "action": "dpop_userinfo_missing",
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001
+  },
+  "expect": { "ok": false, "error": "invalid_token" }
+}

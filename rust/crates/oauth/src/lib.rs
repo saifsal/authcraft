@@ -7,6 +7,7 @@
 pub mod client;
 pub mod code;
 pub mod denylist;
+pub mod dpop;
 pub mod error;
 pub mod id_token;
 pub mod keyring;

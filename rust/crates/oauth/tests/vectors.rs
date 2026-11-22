@@ -4,9 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jose::alg::Alg;
+use jose::b64url;
 use jose::json::{self, Value};
+use jose::jwk::PublicKey;
 use jose::jwks::Jwks;
-use jose::signing::generate_signing_key;
+use jose::signing::{self, generate_signing_key};
 use jose::verify::{self, Policy};
 use oauth::id_token;
 use oauth::pkce;
@@ -28,6 +30,26 @@ fn token_vectors_dir() -> PathBuf {
 
 fn par_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/par")
+}
+
+fn dpop_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/dpop")
+}
+
+fn make_dpop_proof(htm: &str, htu: &str, iat: i64, jti: &str, pkcs8: &[u8], public: &PublicKey) -> String {
+    let x = match public {
+        PublicKey::Ed25519 { x } => b64url::encode(x),
+        _ => panic!("eddsa"),
+    };
+    let header = format!(
+        r#"{{"typ":"dpop+jwt","alg":"EdDSA","jwk":{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}}}"#
+    );
+    let payload = format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}"}}"#);
+    let enc_h = b64url::encode(header.as_bytes());
+    let enc_p = b64url::encode(payload.as_bytes());
+    let input = format!("{enc_h}.{enc_p}");
+    let sig = signing::sign(Alg::EdDSA, pkcs8, input.as_bytes()).unwrap();
+    format!("{input}.{}", b64url::encode(&sig))
 }
 
 fn string<'a>(v: &'a Value, name: &str) -> &'a str {
@@ -135,10 +157,10 @@ fn run_code_flow_vector(path: &Path) {
         refresh_token: String::new(),
     };
 
-    let first = srv.exchange_token(&req, now_token);
+    let first = srv.exchange_token(&req, now_token, None, "https://auth.example/token");
     if bool_field(steps, "replay_token") {
         first.unwrap_or_else(|e| panic!("{case}: first token: {e}"));
-        let second = srv.exchange_token(&req, now_token + 1);
+        let second = srv.exchange_token(&req, now_token + 1, None, "https://auth.example/token");
         assert!(!ok);
         let err = second.expect_err("expected replay failure");
         assert_eq!(err.code(), string(expect, "error"), "{case}");
@@ -199,7 +221,7 @@ fn run_code_flow_vector(path: &Path) {
 
         if bool_field(steps, "check_userinfo") {
             let info = srv
-                .userinfo(&token.access_token, now_token)
+                .userinfo(&token.access_token, now_token, None, "https://auth.example/userinfo")
                 .unwrap_or_else(|e| panic!("{case}: userinfo: {e}"));
             assert_eq!(info.sub, subject, "{case}");
             if let Some(name) = optional_string(steps, "name") {
@@ -222,7 +244,7 @@ fn run_userinfo_reject_vector(path: &Path) {
     let expect = root.get("expect").expect("expect");
     let srv = make_server();
     let err = srv
-        .userinfo("not.a.jwt", 1_000)
+        .userinfo("not.a.jwt", 1_000, None, "https://auth.example/userinfo")
         .expect_err("expected userinfo failure");
     assert_eq!(err.code(), string(expect, "error"), "{case}");
 }
@@ -307,8 +329,7 @@ fn run_token_lifecycle_vector(path: &Path) {
                 code_verifier: verifier.into(),
                 refresh_token: String::new(),
             },
-            now_token,
-        )
+            now_token, None, "https://auth.example/token")
         .unwrap_or_else(|e| panic!("{case}: token: {e}"));
     let rt = first
         .refresh_token
@@ -333,7 +354,7 @@ fn run_token_lifecycle_vector(path: &Path) {
                 .unwrap()
                 .active);
             assert_eq!(
-                srv.userinfo(&first.access_token, now_token)
+                srv.userinfo(&first.access_token, now_token, None, "https://auth.example/userinfo")
                     .unwrap_err()
                     .code(),
                 "invalid_token"
@@ -358,8 +379,7 @@ fn run_token_lifecycle_vector(path: &Path) {
                         code_verifier: String::new(),
                         refresh_token: rt,
                     },
-                    now_refresh,
-                )
+                    now_refresh, None, "https://auth.example/token")
                 .unwrap_or_else(|e| panic!("{case}: refresh: {e}"));
             assert!(second.refresh_token.is_some(), "{case}");
             assert!(second.id_token.is_none(), "{case}");
@@ -390,8 +410,7 @@ fn run_token_lifecycle_vector(path: &Path) {
                         code_verifier: String::new(),
                         refresh_token: rt.clone(),
                     },
-                    now_refresh,
-                )
+                    now_refresh, None, "https://auth.example/token")
                 .unwrap();
             let err = srv
                 .exchange_token(
@@ -403,8 +422,7 @@ fn run_token_lifecycle_vector(path: &Path) {
                         code_verifier: String::new(),
                         refresh_token: rt,
                     },
-                    now_refresh + 1,
-                )
+                    now_refresh + 1, None, "https://auth.example/token")
                 .expect_err("reuse");
             assert_eq!(err.code(), string(expect, "error"), "{case}");
             let rotated = second.refresh_token.expect("rotated");
@@ -418,8 +436,7 @@ fn run_token_lifecycle_vector(path: &Path) {
                         code_verifier: String::new(),
                         refresh_token: rotated,
                     },
-                    now_refresh + 2,
-                )
+                    now_refresh + 2, None, "https://auth.example/token")
                 .expect_err("family dead");
             assert_eq!(err2.code(), "invalid_grant", "{case}");
         }
@@ -501,8 +518,7 @@ fn run_par_vector(path: &Path) {
                         code_verifier: verifier.into(),
                         refresh_token: String::new(),
                     },
-                    now_token,
-                )
+                    now_token, None, "https://auth.example/token")
                 .unwrap();
             assert!(!tok.access_token.is_empty());
         }
@@ -550,5 +566,152 @@ fn par_shared_vectors() {
     assert!(!files.is_empty(), "no par vectors");
     for f in files {
         run_par_vector(&f);
+    }
+}
+
+fn run_dpop_vector(path: &Path) {
+    let case = path.display().to_string();
+    let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(string(&root, "id"), path.file_stem().unwrap().to_str().unwrap());
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+    let action = string(steps, "action");
+    let client_id = string(steps, "client_id");
+    let redirect_uri = string(steps, "redirect_uri");
+    let verifier = string(steps, "code_verifier");
+    let now_auth = integer(steps, "now_authorize");
+    let now_token = integer(steps, "now_token");
+
+    let srv = make_server();
+    let challenge = pkce::challenge_s256(verifier).unwrap();
+    let pending = srv
+        .begin_authorize(
+            &AuthorizeRequest {
+                response_type: "code".into(),
+                client_id: client_id.into(),
+                redirect_uri: redirect_uri.into(),
+                code_challenge: challenge,
+                code_challenge_method: "S256".into(),
+                state: None,
+                scope: Some("read".into()),
+                nonce: None,
+                request_uri: None,
+            },
+            now_auth,
+        )
+        .unwrap();
+    let issued = srv
+        .finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
+        .unwrap();
+
+    let dpop_key = generate_signing_key(Alg::EdDSA).unwrap();
+    let token_htu = "https://auth.example/token";
+    let userinfo_htu = "https://auth.example/userinfo";
+
+    match action {
+        "dpop_bind" => {
+            let proof = make_dpop_proof(
+                "POST",
+                token_htu,
+                now_token,
+                "j-bind",
+                &dpop_key.pkcs8,
+                &dpop_key.public,
+            );
+            let tok = srv
+                .exchange_token(
+                    &TokenRequest {
+                        grant_type: "authorization_code".into(),
+                        code: issued.code,
+                        redirect_uri: redirect_uri.into(),
+                        client_id: client_id.into(),
+                        code_verifier: verifier.into(),
+                        refresh_token: String::new(),
+                    },
+                    now_token,
+                    Some(&proof),
+                    token_htu,
+                )
+                .unwrap();
+            assert_eq!(tok.token_type, string(expect, "token_type"));
+            let proof2 = make_dpop_proof(
+                "GET",
+                userinfo_htu,
+                now_token,
+                "j-ui",
+                &dpop_key.pkcs8,
+                &dpop_key.public,
+            );
+            let info = srv
+                .userinfo(&tok.access_token, now_token, Some(&proof2), userinfo_htu)
+                .unwrap();
+            assert_eq!(info.sub, string(steps, "subject"));
+        }
+        "dpop_bad_htu" => {
+            let proof = make_dpop_proof(
+                "POST",
+                "https://auth.example/wrong",
+                now_token,
+                "j-bad",
+                &dpop_key.pkcs8,
+                &dpop_key.public,
+            );
+            let err = srv
+                .exchange_token(
+                    &TokenRequest {
+                        grant_type: "authorization_code".into(),
+                        code: issued.code,
+                        redirect_uri: redirect_uri.into(),
+                        client_id: client_id.into(),
+                        code_verifier: verifier.into(),
+                        refresh_token: String::new(),
+                    },
+                    now_token,
+                    Some(&proof),
+                    token_htu,
+                )
+                .expect_err("bad htu");
+            assert_eq!(err.code(), string(expect, "error"), "{case}");
+        }
+        "dpop_userinfo_missing" => {
+            let proof = make_dpop_proof(
+                "POST",
+                token_htu,
+                now_token,
+                "j-miss",
+                &dpop_key.pkcs8,
+                &dpop_key.public,
+            );
+            let tok = srv
+                .exchange_token(
+                    &TokenRequest {
+                        grant_type: "authorization_code".into(),
+                        code: issued.code,
+                        redirect_uri: redirect_uri.into(),
+                        client_id: client_id.into(),
+                        code_verifier: verifier.into(),
+                        refresh_token: String::new(),
+                    },
+                    now_token,
+                    Some(&proof),
+                    token_htu,
+                )
+                .unwrap();
+            let err = srv
+                .userinfo(&tok.access_token, now_token, None, userinfo_htu)
+                .expect_err("missing proof");
+            assert_eq!(err.code(), string(expect, "error"), "{case}");
+        }
+        other => panic!("{case}: unknown action {other}"),
+    }
+}
+
+#[test]
+fn dpop_shared_vectors() {
+    let files = load_json_vectors(&dpop_vectors_dir());
+    assert!(!files.is_empty(), "no dpop vectors");
+    for f in files {
+        run_dpop_vector(&f);
     }
 }

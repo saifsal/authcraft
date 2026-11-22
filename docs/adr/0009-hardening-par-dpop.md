@@ -26,7 +26,15 @@ access tokens. M4 adds those without confidential-client auth or real login.
 
 ### B2 — DPoP (RFC 9449)
 
-*(filled in DPoP commit)*
+1. Optional: without a `DPoP` header, `/token` issues Bearer access tokens (no
+   `cnf`).
+2. With `DPoP`: verify EdDSA proof (`typ`=`dpop+jwt`, embedded `jwk`, `htm`/`htu`,
+   `iat` within 120s, unique `jti`); mint access token with
+   `cnf: {"jkt":"<thumbprint>"}` and `token_type`=`DPoP`.
+3. Embedded `jwk` is verified only for DPoP proofs (ADR 0003 still ignores
+   header `jwk` for ordinary access-token verification).
+4. If an access token has `cnf.jkt`, `/userinfo` requires a matching DPoP proof.
+5. Discovery lists `dpop_signing_alg_values_supported: ["EdDSA"]`.
 
 ## Consequences
 

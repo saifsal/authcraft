@@ -88,6 +88,7 @@ Profile: [ADR 0009](adr/0009-hardening-par-dpop.md). Narrative: [oauth-m4.md](oa
 | Specification | In-scope behavior | Evidence |
 |---|---|---|
 | RFC 9126 | `POST /par`; single-use `request_uri` on `/authorize` | `testvectors/par/` + `oauth` tests |
+| RFC 9449 | Optional DPoP; `cnf.jkt`; UserInfo proof when bound | `testvectors/dpop/` + `oauth::dpop` |
 
 ## Other RFCs referenced by the project
 

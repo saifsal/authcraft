@@ -264,7 +264,15 @@ pub struct TokenForm {
     pub refresh_token: Option<String>,
 }
 
-async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Response {
+fn dpop_header(headers: &HeaderMap) -> Option<&str> {
+    headers.get("dpop")?.to_str().ok()
+}
+
+async fn token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<TokenForm>,
+) -> Response {
     let req = TokenRequest {
         grant_type: form.grant_type.unwrap_or_default(),
         code: form.code.unwrap_or_default(),
@@ -273,7 +281,11 @@ async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Re
         code_verifier: form.code_verifier.unwrap_or_default(),
         refresh_token: form.refresh_token.unwrap_or_default(),
     };
-    match state.server.exchange_token(&req, now_unix()) {
+    let htu = format!("{}/token", state.server.config.issuer);
+    match state
+        .server
+        .exchange_token(&req, now_unix(), dpop_header(&headers), &htu)
+    {
         Ok(tok) => {
             let mut body = serde_json::json!({
                 "access_token": tok.access_token,
@@ -324,13 +336,15 @@ async fn openid_configuration(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+fn access_token_from_auth(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    value.strip_prefix("Bearer ")
+    value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("DPoP "))
 }
 
 async fn userinfo(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(token) = bearer_token(&headers) else {
+    let Some(token) = access_token_from_auth(&headers) else {
         return (
             StatusCode::UNAUTHORIZED,
             [(
@@ -342,7 +356,11 @@ async fn userinfo(State(state): State<AppState>, headers: HeaderMap) -> Response
             .into_response();
     };
 
-    match state.server.userinfo(token, now_unix()) {
+    let htu = format!("{}/userinfo", state.server.config.issuer);
+    match state
+        .server
+        .userinfo(token, now_unix(), dpop_header(&headers), &htu)
+    {
         Ok(info) => {
             let mut body = serde_json::json!({ "sub": info.sub });
             if let Some(name) = info.name {

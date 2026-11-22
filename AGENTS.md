@@ -6,12 +6,15 @@ authcraft is an educational OAuth 2.0 / OpenID Connect identity provider. Its pu
 
 Milestone M0 is in progress. The checked-in Rust library crate `jose` at `rust/crates/jose` signs and verifies compact JWS/JWT payloads, parses JWK and JWKS documents, computes RFC 7638 thumbprints, and enforces the verifier rules in `docs/adr/0003-verifier-check-order.md`. Generated vectors covering the ADR 0003 minimum negative set and positive time-boundary cases live under `testvectors/generated/`; compact RFC examples under `testvectors/rfc/`. The Zig package at `zig/` and the Go package at `go/jose` implement the same compact JWS/JWT verifier and run the shared vectors. The Go harness at `go/harness` also differentially compares Go verdicts to `jose-cli` when that binary is available. Later milestones (OAuth, OIDC, token lifecycle, authentication, control plane, federation) are planned and have no code yet.
 
-The next step is written in [`docs/rfc-conformance.md`](docs/rfc-conformance.md). That document is the M0 scope, the evidence that exists today, and the completion rule: do not treat a behavior as conformant until shared vectors exercise it. Accepted decisions that constrain that work are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md).
+M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI). [`docs/rfc-conformance.md`](docs/rfc-conformance.md) remains the scope map and the rule for marking a behavior conformant. Accepted decisions are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md); M1 (OAuth authorization code + PKCE) is next for product work, with Zig C ABI / edge sidecar still open on the JOSE side.
 
 ## Repository layout
 
 ```
 .
+├── .github/
+│   └── workflows/
+│       └── ci.yml                         # Rust/Zig/Go tests + gen-vectors dirty check
 ├── docs/
 │   ├── adr/
 │   │   ├── 0001-eddsa-default.md          # EdDSA default; HS256 verify-only; no `none`
@@ -73,7 +76,7 @@ The next step is written in [`docs/rfc-conformance.md`](docs/rfc-conformance.md)
 └── AGENTS.md
 ```
 
-These paths are described in older notes and are not in the tree: `go/`, `docs/threat-model.md`, and `.github/workflows/`. When another language is added, give it its own `mise.toml` in that directory.
+These paths are described in older notes and are not in the tree: `docs/threat-model.md`. When another language is added, give it its own `mise.toml` in that directory.
 
 ## Setup
 
@@ -153,11 +156,15 @@ The first command filters every target by that name, so the library unit tests r
 
 ## CI and tooling
 
-No CI workflow is checked in. `.github/workflows/` does not exist. `docs/adr/0002-vectors-are-the-contract.md` describes a future CI job that regenerates vectors with `jose-cli gen-vectors` and fails if the tree changes. The generator and committed files under `testvectors/generated/` are in the repository; the CI job is not.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and pull requests to `main`:
 
-Local tooling that does exist:
+- Rust: `cargo test --workspace`, Clippy with `-D warnings`, build `jose-cli`, then `jose-cli gen-vectors --out testvectors/generated` and `git diff --exit-code` (ADR 0002).
+- Zig: `zig build test` on Zig 0.14.1.
+- Go: `go test ./...` with `AUTHCRAFT_JOSE_CLI` pointing at the Rust-built `jose-cli` artifact (shared vectors plus differential).
 
-- `rust/mise.toml` pins Rust to the stable channel.
+Local tooling:
+
+- `rust/mise.toml` pins Rust to the stable channel; `zig/mise.toml` pins Zig 0.14.1; `go/mise.toml` pins Go 1.27.4.
 - `rust/Cargo.lock` is committed.
 - Clippy, as invoked in [Build, run and test](#build-run-and-test), passes with `-D warnings` on stable.
 - rustfmt is not enforced. See the `cargo fmt` note above.

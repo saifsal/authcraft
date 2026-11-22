@@ -261,7 +261,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M0** | JOSE: JWS signing and verification, JWK/JWKS, thumbprints, shared test vectors | Largely complete. Rust, Zig, and Go verifiers agree on `testvectors/`; the Go harness differentially checks Go against `jose-cli`. C ABI / edge sidecar and CI vector regeneration remain future work. |
+| **M0** | JOSE: JWS signing and verification, JWK/JWKS, thumbprints, shared test vectors | Complete for the verifier contract. Rust, Zig, and Go agree on `testvectors/`; Go differentials against `jose-cli`; CI regenerates vectors and runs all three suites. Zig C ABI / edge sidecar remain later work. |
 | M1 | OAuth 2.0 authorization code flow with PKCE | Planned |
 | M2 | OpenID Connect: ID tokens, discovery, userinfo | Planned |
 | M3 | Token lifecycle: refresh rotation, introspection, revocation, key rotation | Planned |
@@ -271,7 +271,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 | M7 | Federation: OIDC relying-party connector, LDAP gateway | Planned |
 | M8 | Assurance: OpenID conformance suite, attack harness, fuzzing in CI | Planned |
 
-[`docs/rfc-conformance.md`](docs/rfc-conformance.md) is the working plan for M0. It records remaining evidence (shared RFC vectors and another implementation that agrees with them) and the rule for marking a behavior conformant.
+[`docs/rfc-conformance.md`](docs/rfc-conformance.md) is the M0 scope map and the rule for marking a behavior conformant (shared vectors plus agreement across implementations).
 
 The intended shape, once M0 is filled in, is three implementations of one verifier contract:
 
@@ -302,7 +302,7 @@ flowchart LR
 
 The Rust signer and the Rust, Zig, and Go verifiers in that diagram exist as library functions. Generated vectors under `testvectors/generated/` and the RFC compact examples under `testvectors/rfc/` run against all three (`cargo test -p jose --test vectors`, `mise exec -- zig build test` from `zig/`, `mise exec -- go test ./...` from `go/`). The Go harness also compares Go verdicts to `jose-cli` when that binary is available.
 
-No GitHub Actions workflow is checked in. ADR 0002 describes a future CI check that regenerates vectors and fails on a dirty tree. That check waits on the CLI and the vector files.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) regenerates `testvectors/generated/` with `jose-cli gen-vectors` and fails if the tree changes (ADR 0002), and runs the Rust, Zig, and Go test suites.
 
 ### Security notes
 

@@ -1,9 +1,11 @@
 # RFC conformance
 
 This document defines the intended M0 JOSE scope and tracks the evidence for
-each area. It is a draft: implementation-level conformance is not established
-until shared vectors exercise the behavior and all implementations agree on the
-expected result, as required by ADR 0002.
+each area. Implementation-level conformance for an item requires shared vectors
+that exercise the behavior and agreement from every implemented verifier on the
+expected result, as required by ADR 0002. Rust, Zig, and Go currently satisfy
+that bar for the M0 checks listed below; CI regenerates the generated vector
+set and re-runs the three suites.
 
 **Implemented** below means Rust code exists for the listed behavior; it does not
 mean that the behavior has passed the shared-vector suite. Unit tests are useful

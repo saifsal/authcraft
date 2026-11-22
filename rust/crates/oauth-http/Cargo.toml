@@ -1,0 +1,27 @@
+[package]
+name = "oauth-http"
+version = "0.1.0"
+edition = "2021"
+description = "Thin Axum HTTP binder for authcraft M1 OAuth (ADR 0005). Educational use only."
+publish = false
+
+[[bin]]
+name = "oauth-http"
+path = "src/main.rs"
+
+[dependencies]
+oauth = { path = "../oauth" }
+jose = { path = "../jose" }
+axum = { version = "0.8", features = ["form"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ring = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+jose = { path = "../jose" }

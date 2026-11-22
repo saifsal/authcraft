@@ -1,0 +1,21 @@
+{
+  "id": "neg-replay-code",
+  "source": "generated",
+  "description": "Redeeming the same authorization code twice yields invalid_grant.",
+  "steps": {
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "code_challenge_method": "S256",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "replay_token": true
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_grant",
+    "phase": "token"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/authcraft/testvectors/oauth/schema.json",
+  "title": "authcraft OAuth M1 test vector",
+  "description": "One authorization-code + PKCE case for the oauth crate (ADR 0005).",
+  "type": "object",
+  "required": ["id", "source", "steps", "expect"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "source": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "steps": {
+      "type": "object",
+      "required": ["client_id", "redirect_uri", "code_challenge_method", "code_verifier", "subject", "now_authorize", "now_token"],
+      "additionalProperties": false,
+      "properties": {
+        "client_id": { "type": "string" },
+        "redirect_uri": { "type": "string" },
+        "code_challenge_method": { "type": "string" },
+        "code_verifier": { "type": "string" },
+        "code_challenge": { "type": "string", "description": "When omitted, derived as S256(verifier)." },
+        "subject": { "type": "string" },
+        "scope": { "type": "string" },
+        "state": { "type": "string" },
+        "now_authorize": { "type": "integer" },
+        "now_token": { "type": "integer" },
+        "replay_token": { "type": "boolean", "default": false },
+        "token_code_verifier": { "type": "string", "description": "Override verifier at token time (wrong-verifier cases)." },
+        "token_redirect_uri": { "type": "string" },
+        "token_client_id": { "type": "string" }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "required": ["ok"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "type": "boolean" },
+        "error": {
+          "type": "string",
+          "enum": [
+            "invalid_request",
+            "unauthorized_client",
+            "invalid_grant",
+            "unsupported_grant_type",
+            "server_error"
+          ]
+        },
+        "phase": {
+          "type": "string",
+          "enum": ["authorize", "token"],
+          "description": "Which step fails when ok is false. Defaults to authorize for invalid_request on method, else token."
+        }
+      }
+    }
+  }
+}

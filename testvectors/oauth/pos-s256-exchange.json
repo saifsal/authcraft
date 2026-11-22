@@ -1,0 +1,20 @@
+{
+  "id": "pos-s256-exchange",
+  "source": "generated",
+  "description": "S256 PKCE authorization-code exchange succeeds.",
+  "steps": {
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "code_challenge_method": "S256",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    "subject": "alice",
+    "scope": "read",
+    "state": "xyz",
+    "now_authorize": 1000,
+    "now_token": 1001
+  },
+  "expect": {
+    "ok": true
+  }
+}

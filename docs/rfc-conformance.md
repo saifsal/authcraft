@@ -49,17 +49,24 @@ all of JOSE or all JWT claims and profiles.
 - The claim profile and check order, including project-specific deviations, are
   specified in [ADR 0003](adr/0003-verifier-check-order.md).
 
+## M1 OAuth (authorization code + PKCE)
+
+Profile: [ADR 0005](adr/0005-oauth-code-pkce.md). Narrative: [oauth-m1.md](oauth-m1.md).
+
+| Specification | In-scope behavior | Evidence |
+|---|---|---|
+| RFC 6749 §4.1 | Authorization code grant; public clients; `/authorize` + `/token` | `rust/crates/oauth`, `oauth-http` e2e test |
+| RFC 7636 | S256 PKCE required; `plain` rejected; verifier length/charset | `testvectors/oauth/` + `oauth` tests (incl. RFC Appendix B challenge) |
+| RFC 9068 (partial) | Access tokens are `at+jwt` with `iss`/`aud`/`exp`/`sub` | Minted by `oauth`, verified with M0 `jose` |
+
 ## Other RFCs referenced by the project
 
-These specifications inform later milestones or provide context, but are not
-conformance targets for M0:
+These specifications inform later milestones or provide context:
 
 | Specification | Planned relevance |
 |---|---|
-| RFC 6749, OAuth 2.0 | Authorization-server and authorization-code flow work after M0 |
-| RFC 7636, PKCE | Authorization-code flow hardening after M0 |
-| RFC 9700, OAuth 2.0 Security BCP | Later OAuth hardening milestone |
-| OpenID Connect Core 1.0 | Later OIDC milestone |
+| RFC 9700, OAuth 2.0 Security BCP | Later OAuth hardening milestone (M4) |
+| OpenID Connect Core 1.0 | Later OIDC milestone (M2) |
 
 ## Checked-in RFC vectors
 

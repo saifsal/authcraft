@@ -1,0 +1,12 @@
+[package]
+name = "oauth"
+version = "0.1.0"
+edition = "2021"
+description = "OAuth 2.0 authorization-code + PKCE (S256) library for authcraft M1. Educational use only."
+publish = false
+
+[dependencies]
+jose = { path = "../jose" }
+ring = "0.17"
+
+[dev-dependencies]

@@ -263,6 +263,8 @@ Useful design notes while changing verification:
 - [`docs/adr/0010-authentication.md`](docs/adr/0010-authentication.md) — M5 passwords / TOTP / WebAuthn.
 - [`docs/adr/0011-control-plane.md`](docs/adr/0011-control-plane.md) — M6 admin / DCR / SCIM.
 - [`docs/adr/0012-federation.md`](docs/adr/0012-federation.md) — M7 OIDC RP / LDAP federation.
+- [`docs/adr/0013-assurance.md`](docs/adr/0013-assurance.md) — M8 attack harness / fuzz / conformance map.
+- [`docs/oauth-m8.md`](docs/oauth-m8.md) — M8 assurance runbook.
 - [`docs/oauth-m3.md`](docs/oauth-m3.md) — M3 token lifecycle runbook.
 - [`docs/oauth-m4.md`](docs/oauth-m4.md) — M4 hardening runbook.
 - [`docs/oauth-m5.md`](docs/oauth-m5.md) — M5 authentication runbook.
@@ -286,7 +288,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 | **M5** | Authentication: Argon2id passwords, TOTP, WebAuthn | Complete for this slice: Argon2id passwords, TOTP and WebAuthn second factors ([ADR 0010](docs/adr/0010-authentication.md), [docs/oauth-m5.md](docs/oauth-m5.md)). |
 | **M6** | Control plane: admin API, dynamic client registration, SCIM 2.0 | Complete for this slice: admin API, RFC 7591 DCR, SCIM Users ([ADR 0011](docs/adr/0011-control-plane.md), [docs/oauth-m6.md](docs/oauth-m6.md)). |
 | **M7** | Federation: OIDC relying-party connector, LDAP gateway | Complete for this slice: OIDC RP + LDAP MemoryDirectory gateway ([ADR 0012](docs/adr/0012-federation.md), [docs/oauth-m7.md](docs/oauth-m7.md)). |
-| M8 | Assurance: OpenID conformance suite, attack harness, fuzzing in CI | Planned |
+| **M8** | Assurance: OpenID conformance suite, attack harness, fuzzing in CI | In progress. B1 attack harness ([ADR 0013](docs/adr/0013-assurance.md), [docs/oauth-m8.md](docs/oauth-m8.md)). Fuzz + conformance checklist next. |
 
 [`docs/rfc-conformance.md`](docs/rfc-conformance.md) is the M0 scope map and the rule for marking a behavior conformant (shared vectors plus agreement across implementations).
 

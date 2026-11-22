@@ -216,7 +216,7 @@ cargo test --workspace
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-`cargo test --workspace` covers `jose`, `jose-cli`, `oauth` (including `testvectors/oauth/`), and `oauth-http` e2e. Clippy with `-D warnings` must pass on the same toolchain. Demo server: `cargo run -p oauth-http` (see [docs/oauth-m1.md](docs/oauth-m1.md)).
+`cargo test --workspace` covers `jose`, `jose-cli`, `oauth` (including `testvectors/oauth/` and `testvectors/oidc/`), and `oauth-http` e2e. Clippy with `-D warnings` must pass on the same toolchain. Demo server: `cargo run -p oauth-http` (see [docs/oauth-m1.md](docs/oauth-m1.md), [docs/oauth-m2.md](docs/oauth-m2.md)).
 
 From `zig/` with Zig 0.14.1:
 
@@ -267,7 +267,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 | Milestone | Scope | Status |
 |---|---|---|
 | **M0** | JOSE: JWS signing and verification, JWK/JWKS, thumbprints, shared test vectors | Complete for the verifier contract. Rust, Zig, and Go agree on `testvectors/`; Go differentials against `jose-cli`; CI regenerates vectors and runs all three suites; Zig exports `authcraft_jose_verify` (ADR 0004). Edge-auth sidecar remains later work. |
-| **M1** | OAuth 2.0 authorization code flow with PKCE | In progress. `oauth` library + `oauth-http` Axum binder (public clients, S256 required, stub login, in-memory codes). See [ADR 0005](docs/adr/0005-oauth-code-pkce.md) and [docs/oauth-m1.md](docs/oauth-m1.md). |
+| **M1** | OAuth 2.0 authorization code flow with PKCE | Complete. `oauth` library + `oauth-http` Axum binder (public clients, S256 required, stub login, in-memory codes, `testvectors/oauth/`). See [ADR 0005](docs/adr/0005-oauth-code-pkce.md) and [docs/oauth-m1.md](docs/oauth-m1.md). |
 | **M2** | OpenID Connect: ID tokens, discovery, userinfo | In progress. `openid` scope → ID token (`nonce`, `at_hash`), discovery, UserInfo on the same crates. See [ADR 0006](docs/adr/0006-oidc-core-code.md) and [docs/oauth-m2.md](docs/oauth-m2.md). |
 | M3 | Token lifecycle: refresh rotation, introspection, revocation, key rotation | Planned |
 | M4 | Hardening: PAR, DPoP, RFC 9700 checklist | Planned |
@@ -282,7 +282,7 @@ The intended shape, once M0 is filled in, is three implementations of one verifi
 
 | Language | Intended component | In this repository |
 |---|---|---|
-| Rust | JOSE signer and, later, the authorization server core | `jose` + M1 `oauth` / `oauth-http` (code + PKCE). |
+| Rust | JOSE signer and authorization-server core | `jose` + `oauth` / `oauth-http` (M1 code+PKCE, M2 OIDC). |
 | Zig | JOSE/JWT verifier, a C ABI, and a small edge-auth sidecar | `zig/`: compact JWS/JWT verifier + C ABI (`authcraft_jose`); sidecar not started |
 | Go | Control plane and the cross-implementation test harness | `go/jose` verifier + `go/harness` (vectors and differential vs `jose-cli`); control plane not started |
 

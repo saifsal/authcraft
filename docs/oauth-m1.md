@@ -1,8 +1,9 @@
 # M1 OAuth authorization code + PKCE
 
-This note tracks the first OAuth slice. Profile decisions are locked in
+**Status: complete.** Profile decisions are locked in
 [ADR 0005](adr/0005-oauth-code-pkce.md). Access tokens are compact `at+jwt`
-values verified by the M0 JOSE stack.
+values verified by the M0 JOSE stack. OpenID Connect on the same flow is M2
+([ADR 0006](adr/0006-oidc-core-code.md), [oauth-m2.md](oauth-m2.md)).
 
 ## What exists
 
@@ -27,7 +28,7 @@ The demo listens on `http://127.0.0.1:8089` with a stub `/login`, ephemeral
 Ed25519 signing key, and a public client `spa` (redirect
 `http://127.0.0.1:9999/cb` and `https://app.example/cb`).
 
-## Not in M1
+## Deferred past M1
 
-Refresh tokens, confidential clients, real authentication, OIDC, PAR/DPoP, and
-cross-language OAuth vectors. See the roadmap in `README.md`.
+Refresh tokens (M3), confidential clients, real authentication (M5), PAR/DPoP
+(M4), and cross-language OAuth vectors. OIDC shipped in M2 on the same crates.

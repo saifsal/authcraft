@@ -4,7 +4,7 @@
 
 authcraft is an educational OAuth 2.0 / OpenID Connect identity provider. Its purpose is to learn the protocols by implementing the layers underneath them (JOSE, token issuance, verification, and later the OAuth and OIDC flows) and to compare independent implementations of the same security-critical code with a shared test-vector contract. It has had no external review. It is not a production identity provider.
 
-Milestone M0 (JOSE) is complete for the shared-vector contract. The Rust library crate `jose` at `rust/crates/jose` signs and verifies compact JWS/JWT payloads, parses JWK and JWKS documents, computes RFC 7638 thumbprints, and enforces the verifier rules in `docs/adr/0003-verifier-check-order.md`. Generated vectors live under `testvectors/generated/`; compact RFC examples under `testvectors/rfc/`. Zig (`zig/`) and Go (`go/jose`) implement the same verifier; `go/harness` differentials against `jose-cli`. Milestone M1 adds `rust/crates/oauth` (authorization code + PKCE S256) and `rust/crates/oauth-http` (Axum binder) with protocol vectors under `testvectors/oauth/`. Later milestones (OIDC, token lifecycle, real authentication, control plane, federation) are planned.
+Milestone M0 (JOSE) is complete for the shared-vector contract. The Rust library crate `jose` at `rust/crates/jose` signs and verifies compact JWS/JWT payloads, parses JWK and JWKS documents, computes RFC 7638 thumbprints, and enforces the verifier rules in `docs/adr/0003-verifier-check-order.md`. Generated vectors live under `testvectors/generated/`; compact RFC examples under `testvectors/rfc/`. Zig (`zig/`) and Go (`go/jose`) implement the same verifier; `go/harness` differentials against `jose-cli`. Milestone M1 (`oauth` + `oauth-http`, `testvectors/oauth/`) is complete. M2 adds OIDC on those crates (`testvectors/oidc/`). Later milestones (token lifecycle, real authentication, control plane, federation) are planned.
 
 M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). M1 adds a Rust `oauth` library and `oauth-http` Axum binder for authorization code + PKCE (ADR 0005). M2 extends those crates with OpenID Connect (ID token, discovery, UserInfo; ADR 0006). [`docs/rfc-conformance.md`](docs/rfc-conformance.md) remains the scope map; [`docs/oauth-m1.md`](docs/oauth-m1.md) and [`docs/oauth-m2.md`](docs/oauth-m2.md) cover the OAuth/OIDC slices. Accepted decisions are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md). The Zig edge-auth sidecar is still open.
 
@@ -120,7 +120,7 @@ cd ../go && mise install
 
 ## Build, run and test
 
-JOSE crates are libraries (`publish = false`). M1 adds `oauth` (library) and `oauth-http` (Axum demo server on `127.0.0.1:8089`). Zig and Go packages remain verifier libraries.
+JOSE crates are libraries (`publish = false`). M1/M2 use `oauth` (library) and `oauth-http` (Axum demo server on `127.0.0.1:8089`). Zig and Go packages remain verifier libraries (edge sidecar still open).
 
 From `rust/`, with stable Rust on `PATH`:
 
@@ -131,7 +131,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo run -p oauth-http
 ```
 
-`cargo test --workspace` and Clippy with `-D warnings` must pass on stable. That suite includes `jose`, `jose-cli`, `oauth` (including `testvectors/oauth/`), and `oauth-http` e2e. See [`docs/oauth-m1.md`](docs/oauth-m1.md) for the HTTP demo.
+`cargo test --workspace` and Clippy with `-D warnings` must pass on stable. That suite includes `jose`, `jose-cli`, `oauth` (including `testvectors/oauth/` and `testvectors/oidc/`), and `oauth-http` e2e. See [`docs/oauth-m1.md`](docs/oauth-m1.md) and [`docs/oauth-m2.md`](docs/oauth-m2.md).
 
 From `zig/`:
 
@@ -203,7 +203,7 @@ Local tooling:
 ## Gotchas
 
 - The tree is the source of truth for what runs. M1 OAuth is Rust-only so far (`oauth` + `oauth-http`); there is no Zig/Go OAuth harness yet. Rust, Zig, and Go JOSE verifiers agree on the shared JOSE vectors; the Go harness differentially checks Go against `jose-cli`.
-- `testvectors/generated/` holds the ADR 0003 minimum negative vector set and positive time-boundary cases. `testvectors/rfc/` holds compact examples copied from RFC 7515 and RFC 8037. They are run against Rust (`tests/vectors.rs`), Zig (`zig/src/vectors.zig`), and Go (`go/harness`). The examples whose headers have no `kid` expect `key_not_found`; their signature bytes are checked by `rfc_signatures_match_when_kid_is_absent` in each language. `testvectors/oauth/` is the M1 contract for the Rust `oauth` crate (ADR 0005). Unit tests are not a substitute for those suites; `docs/rfc-conformance.md` says so.
+- `testvectors/generated/` holds the ADR 0003 minimum negative vector set and positive time-boundary cases. `testvectors/rfc/` holds compact examples copied from RFC 7515 and RFC 8037. They are run against Rust (`tests/vectors.rs`), Zig (`zig/src/vectors.zig`), and Go (`go/harness`). The examples whose headers have no `kid` expect `key_not_found`; their signature bytes are checked by `rfc_signatures_match_when_kid_is_absent` in each language. `testvectors/oauth/` is the M1 contract and `testvectors/oidc/` is the M2 contract for the Rust `oauth` crate (ADR 0005 / ADR 0006). Unit tests are not a substitute for those suites; `docs/rfc-conformance.md` says so.
 - `cargo test` does start the `oauth-http` e2e harness in-process; `cargo run -p oauth-http` is the interactive demo. There is still no production deployment.
 - `docs/threat-model.md` is not in the repository.
 - Rust older than 1.88 does not compile `b64url.rs`. A default toolchain of 1.83 fails even though `Cargo.lock` resolves.

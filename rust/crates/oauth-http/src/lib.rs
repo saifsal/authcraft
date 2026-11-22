@@ -218,6 +218,7 @@ pub struct TokenForm {
     pub redirect_uri: Option<String>,
     pub client_id: Option<String>,
     pub code_verifier: Option<String>,
+    pub refresh_token: Option<String>,
 }
 
 async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Response {
@@ -227,6 +228,7 @@ async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Re
         redirect_uri: form.redirect_uri.unwrap_or_default(),
         client_id: form.client_id.unwrap_or_default(),
         code_verifier: form.code_verifier.unwrap_or_default(),
+        refresh_token: form.refresh_token.unwrap_or_default(),
     };
     match state.server.exchange_token(&req, now_unix()) {
         Ok(tok) => {
@@ -237,6 +239,9 @@ async fn token(State(state): State<AppState>, Form(form): Form<TokenForm>) -> Re
             });
             if let Some(id_token) = tok.id_token {
                 body["id_token"] = serde_json::Value::String(id_token);
+            }
+            if let Some(refresh_token) = tok.refresh_token {
+                body["refresh_token"] = serde_json::Value::String(refresh_token);
             }
             Json(body).into_response()
         }

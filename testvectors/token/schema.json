@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/authcraft/testvectors/token/schema.json",
+  "title": "authcraft token lifecycle M3 test vector",
+  "description": "Refresh / revoke / introspect cases (ADR 0008).",
+  "type": "object",
+  "required": ["id", "source", "steps", "expect"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "source": { "type": "string" },
+    "description": { "type": "string" },
+    "steps": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "expect": {
+      "type": "object",
+      "required": ["ok"],
+      "additionalProperties": true
+    }
+  }
+}

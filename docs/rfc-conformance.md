@@ -70,6 +70,14 @@ Profile: [ADR 0006](adr/0006-oidc-core-code.md). Narrative: [oauth-m2.md](oauth-
 | OIDC Discovery 1.0 | `/.well-known/openid-configuration` | `oauth-http` |
 | OIDC UserInfo | Bearer `at+jwt` → `{sub, name?, email?}` | `AuthorizationServer::userinfo` + e2e |
 
+## M3 token lifecycle
+
+Profile: [ADR 0008](adr/0008-token-lifecycle.md). Narrative: [oauth-m3.md](oauth-m3.md).
+
+| Specification | In-scope behavior | Evidence |
+|---|---|---|
+| RFC 6749 §6 | `refresh_token` grant; rotation; reuse → `invalid_grant` | `testvectors/token/` + `oauth` tests |
+
 ## Other RFCs referenced by the project
 
 These specifications inform later milestones or provide context:

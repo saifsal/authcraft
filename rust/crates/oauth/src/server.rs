@@ -1,4 +1,4 @@
-//! Authorization-code + PKCE + OIDC orchestration (ADR 0005, ADR 0006).
+//! Authorization-code + PKCE + OIDC + refresh orchestration (ADR 0005–0008).
 
 use std::sync::Mutex;
 
@@ -8,12 +8,14 @@ use jose::jwk::PublicKey;
 use jose::jwks::Jwks;
 use jose::signing::SigningKey;
 use jose::verify::{self, Policy};
+use ring::rand::{SecureRandom, SystemRandom};
 
 use crate::client::{Client, ClientRegistry};
 use crate::code::{AuthorizationCode, CodeStore, DEFAULT_CODE_TTL_SECS};
 use crate::error::OAuthError;
 use crate::id_token::{self, IdTokenClaims};
 use crate::pkce::{self, require_s256_method};
+use crate::refresh::{RefreshStore, DEFAULT_REFRESH_TOKEN_TTL_SECS};
 use crate::token::{self, TokenClaims, DEFAULT_ACCESS_TOKEN_TTL_SECS};
 
 /// Server configuration shared by the library and HTTP binder.
@@ -23,6 +25,7 @@ pub struct ServerConfig {
     pub audience: String,
     pub code_ttl_secs: i64,
     pub access_token_ttl_secs: i64,
+    pub refresh_token_ttl_secs: i64,
 }
 
 impl ServerConfig {
@@ -32,6 +35,7 @@ impl ServerConfig {
             audience: audience.into(),
             code_ttl_secs: DEFAULT_CODE_TTL_SECS,
             access_token_ttl_secs: DEFAULT_ACCESS_TOKEN_TTL_SECS,
+            refresh_token_ttl_secs: DEFAULT_REFRESH_TOKEN_TTL_SECS,
         }
     }
 }
@@ -80,6 +84,7 @@ pub struct TokenSuccess {
     pub token_type: &'static str,
     pub expires_in: i64,
     pub id_token: Option<String>,
+    pub refresh_token: Option<String>,
 }
 
 /// Authorize query parameters (already decoded by the HTTP layer).
@@ -103,6 +108,7 @@ pub struct TokenRequest {
     pub redirect_uri: String,
     pub client_id: String,
     pub code_verifier: String,
+    pub refresh_token: String,
 }
 
 /// UserInfo response claims.
@@ -118,6 +124,7 @@ pub struct AuthorizationServer {
     pub config: ServerConfig,
     pub clients: ClientRegistry,
     codes: Mutex<CodeStore>,
+    refresh: Mutex<RefreshStore>,
     pkcs8: Vec<u8>,
     public: PublicKey,
 }
@@ -128,6 +135,7 @@ impl AuthorizationServer {
             config,
             clients: ClientRegistry::new(clients),
             codes: Mutex::new(CodeStore::new()),
+            refresh: Mutex::new(RefreshStore::new()),
             pkcs8: signing.pkcs8,
             public: signing.public,
         }
@@ -161,8 +169,46 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"scopes_supported":["openid","profile","email"]}}"#
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"scopes_supported":["openid","profile","email"]}}"#
         )
+    }
+
+    fn new_jti() -> Result<String, OAuthError> {
+        let mut bytes = [0u8; 16];
+        SystemRandom::new()
+            .fill(&mut bytes)
+            .map_err(|_| OAuthError::ServerError)?;
+        Ok(b64url::encode(&bytes))
+    }
+
+    fn mint_access(
+        &self,
+        subject: &str,
+        client_id: &str,
+        scope: Option<&str>,
+        name: Option<&str>,
+        email: Option<&str>,
+        now: i64,
+    ) -> Result<(String, i64), OAuthError> {
+        let exp = now.saturating_add(self.config.access_token_ttl_secs);
+        let jti = Self::new_jti()?;
+        let access_token = token::mint_access_token(
+            &self.pkcs8,
+            &self.public,
+            &TokenClaims {
+                iss: &self.config.issuer,
+                aud: &self.config.audience,
+                sub: subject,
+                client_id,
+                jti: &jti,
+                scope,
+                name,
+                email,
+                iat: now,
+                exp,
+            },
+        )?;
+        Ok((access_token, exp))
     }
 
     /// Validates authorize parameters. Does not issue a code until [`finish_authorize`].
@@ -230,11 +276,20 @@ impl AuthorizationServer {
         })
     }
 
-    /// Exchanges an authorization code for an access token (and ID token when `openid`).
+    /// Exchanges an authorization code or refresh token (ADR 0008).
     pub fn exchange_token(&self, req: &TokenRequest, now: i64) -> Result<TokenSuccess, OAuthError> {
-        if req.grant_type != "authorization_code" {
-            return Err(OAuthError::UnsupportedGrantType);
+        match req.grant_type.as_str() {
+            "authorization_code" => self.exchange_authorization_code(req, now),
+            "refresh_token" => self.exchange_refresh_token(req, now),
+            _ => Err(OAuthError::UnsupportedGrantType),
         }
+    }
+
+    fn exchange_authorization_code(
+        &self,
+        req: &TokenRequest,
+        now: i64,
+    ) -> Result<TokenSuccess, OAuthError> {
         self.clients.get(&req.client_id)?;
 
         let mut store = self.codes.lock().map_err(|_| OAuthError::ServerError)?;
@@ -246,21 +301,13 @@ impl AuthorizationServer {
         }
         pkce::verify_s256(&req.code_verifier, &record.code_challenge)?;
 
-        let exp = now.saturating_add(self.config.access_token_ttl_secs);
-        let access_token = token::mint_access_token(
-            &self.pkcs8,
-            &self.public,
-            &TokenClaims {
-                iss: &self.config.issuer,
-                aud: &self.config.audience,
-                sub: &record.subject,
-                client_id: &record.client_id,
-                scope: record.scope.as_deref(),
-                name: record.name.as_deref(),
-                email: record.email.as_deref(),
-                iat: now,
-                exp,
-            },
+        let (access_token, exp) = self.mint_access(
+            &record.subject,
+            &record.client_id,
+            record.scope.as_deref(),
+            record.name.as_deref(),
+            record.email.as_deref(),
+            now,
         )?;
 
         let id_token = if id_token::scope_has_openid(record.scope.as_deref()) {
@@ -285,11 +332,57 @@ impl AuthorizationServer {
             None
         };
 
+        let refresh_exp = now.saturating_add(self.config.refresh_token_ttl_secs);
+        let mut refresh = self.refresh.lock().map_err(|_| OAuthError::ServerError)?;
+        let refresh_token = refresh.issue_new_family(
+            record.client_id.clone(),
+            record.subject.clone(),
+            record.scope.clone(),
+            record.name.clone(),
+            record.email.clone(),
+            refresh_exp,
+        )?;
+
         Ok(TokenSuccess {
             access_token,
             token_type: "Bearer",
             expires_in: self.config.access_token_ttl_secs,
             id_token,
+            refresh_token: Some(refresh_token),
+        })
+    }
+
+    fn exchange_refresh_token(
+        &self,
+        req: &TokenRequest,
+        now: i64,
+    ) -> Result<TokenSuccess, OAuthError> {
+        self.clients.get(&req.client_id)?;
+        if req.refresh_token.is_empty() {
+            return Err(OAuthError::InvalidRequest);
+        }
+
+        let refresh_exp = now.saturating_add(self.config.refresh_token_ttl_secs);
+        let mut store = self.refresh.lock().map_err(|_| OAuthError::ServerError)?;
+        let (refresh_token, record) =
+            store.rotate(&req.refresh_token, &req.client_id, now, refresh_exp)?;
+        drop(store);
+
+        let (access_token, _) = self.mint_access(
+            &record.subject,
+            &record.client_id,
+            record.scope.as_deref(),
+            record.name.as_deref(),
+            record.email.as_deref(),
+            now,
+        )?;
+
+        Ok(TokenSuccess {
+            access_token,
+            token_type: "Bearer",
+            expires_in: self.config.access_token_ttl_secs,
+            id_token: None,
+            refresh_token: Some(refresh_token),
         })
     }
 
@@ -381,6 +474,7 @@ mod tests {
                     redirect_uri: "https://app.example/cb".into(),
                     client_id: "spa".into(),
                     code_verifier: verifier,
+                    refresh_token: String::new(),
                 },
                 1_001,
             )
@@ -388,6 +482,7 @@ mod tests {
         assert_eq!(token.token_type, "Bearer");
         assert_eq!(token.expires_in, DEFAULT_ACCESS_TOKEN_TTL_SECS);
         assert!(token.id_token.is_none());
+        assert!(token.refresh_token.is_some());
 
         let jwks = Jwks::parse(srv.jwks_document().as_bytes()).unwrap();
         let verified = verify::verify(
@@ -443,11 +538,13 @@ mod tests {
                     redirect_uri: "https://app.example/cb".into(),
                     client_id: "spa".into(),
                     code_verifier: verifier,
+                    refresh_token: String::new(),
                 },
                 1_001,
             )
             .unwrap();
         let id_token = token.id_token.expect("id_token");
+        assert!(token.refresh_token.is_some());
         let expected_hash = id_token::at_hash_eddsa(&token.access_token);
 
         let jwks = Jwks::parse(srv.jwks_document().as_bytes()).unwrap();
@@ -511,10 +608,65 @@ mod tests {
             redirect_uri: "https://app.example/cb".into(),
             client_id: "spa".into(),
             code_verifier: verifier,
+            refresh_token: String::new(),
         };
         srv.exchange_token(&req, 1_001).unwrap();
         assert!(matches!(
             srv.exchange_token(&req, 1_002),
+            Err(OAuthError::InvalidGrant)
+        ));
+    }
+
+    #[test]
+    fn refresh_rotates_and_reuse_is_invalid_grant() {
+        let srv = server();
+        let verifier = "a".repeat(43);
+        let mut p = pending(&srv);
+        p.code_challenge = pkce::challenge_s256(&verifier).unwrap();
+        let issued = srv
+            .finish_authorize(p, &LoginSubject::new("alice"), 1_000)
+            .unwrap();
+        let first = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "authorization_code".into(),
+                    code: issued.code,
+                    redirect_uri: "https://app.example/cb".into(),
+                    client_id: "spa".into(),
+                    code_verifier: verifier,
+                    refresh_token: String::new(),
+                },
+                1_001,
+            )
+            .unwrap();
+        let rt = first.refresh_token.expect("refresh");
+        let second = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "refresh_token".into(),
+                    code: String::new(),
+                    redirect_uri: String::new(),
+                    client_id: "spa".into(),
+                    code_verifier: String::new(),
+                    refresh_token: rt.clone(),
+                },
+                1_002,
+            )
+            .unwrap();
+        assert!(second.refresh_token.is_some());
+        assert!(second.id_token.is_none());
+        assert!(matches!(
+            srv.exchange_token(
+                &TokenRequest {
+                    grant_type: "refresh_token".into(),
+                    code: String::new(),
+                    redirect_uri: String::new(),
+                    client_id: "spa".into(),
+                    code_verifier: String::new(),
+                    refresh_token: rt,
+                },
+                1_003,
+            ),
             Err(OAuthError::InvalidGrant)
         ));
     }
@@ -551,6 +703,7 @@ mod tests {
                     redirect_uri: "https://app.example/cb".into(),
                     client_id: "spa".into(),
                     code_verifier: "b".repeat(43),
+                    refresh_token: String::new(),
                 },
                 1_001,
             ),

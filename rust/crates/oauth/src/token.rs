@@ -15,6 +15,7 @@ pub struct TokenClaims<'a> {
     pub aud: &'a str,
     pub sub: &'a str,
     pub client_id: &'a str,
+    pub jti: &'a str,
     pub scope: Option<&'a str>,
     pub name: Option<&'a str>,
     pub email: Option<&'a str>,
@@ -31,11 +32,12 @@ pub fn mint_access_token(
     let kid = public.thumbprint();
     let header = format!(r#"{{"alg":"EdDSA","kid":"{kid}","typ":"at+jwt"}}"#);
     let mut payload = format!(
-        r#"{{"iss":"{}","aud":"{}","sub":"{}","client_id":"{}","iat":{},"exp":{}"#,
+        r#"{{"iss":"{}","aud":"{}","sub":"{}","client_id":"{}","jti":"{}","iat":{},"exp":{}"#,
         json_escape(claims.iss),
         json_escape(claims.aud),
         json_escape(claims.sub),
         json_escape(claims.client_id),
+        json_escape(claims.jti),
         claims.iat,
         claims.exp,
     );

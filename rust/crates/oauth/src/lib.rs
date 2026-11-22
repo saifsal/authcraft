@@ -9,6 +9,7 @@ pub mod code;
 pub mod error;
 pub mod id_token;
 pub mod pkce;
+pub mod refresh;
 pub mod server;
 pub mod token;
 

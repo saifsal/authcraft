@@ -22,6 +22,10 @@ fn oidc_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/oidc")
 }
 
+fn token_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/token")
+}
+
 fn string<'a>(v: &'a Value, name: &str) -> &'a str {
     v.get(name)
         .and_then(Value::as_str)
@@ -123,6 +127,7 @@ fn run_code_flow_vector(path: &Path) {
         redirect_uri: token_redirect.into(),
         client_id: token_client.into(),
         code_verifier: token_verifier.into(),
+        refresh_token: String::new(),
     };
 
     let first = srv.exchange_token(&req, now_token);
@@ -250,5 +255,146 @@ fn oidc_shared_vectors() {
         } else {
             run_code_flow_vector(&f);
         }
+    }
+}
+
+fn run_token_lifecycle_vector(path: &Path) {
+    let case = path.display().to_string();
+    let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(string(&root, "id"), path.file_stem().unwrap().to_str().unwrap());
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+    let action = string(steps, "action");
+
+    let client_id = string(steps, "client_id");
+    let redirect_uri = string(steps, "redirect_uri");
+    let verifier = string(steps, "code_verifier");
+    let challenge = pkce::challenge_s256(verifier).expect("challenge");
+    let now_auth = integer(steps, "now_authorize");
+    let now_token = integer(steps, "now_token");
+    let now_refresh = integer(steps, "now_refresh");
+
+    let srv = make_server();
+    let pending = srv
+        .begin_authorize(&AuthorizeRequest {
+            response_type: "code".into(),
+            client_id: client_id.into(),
+            redirect_uri: redirect_uri.into(),
+            code_challenge: challenge,
+            code_challenge_method: string(steps, "code_challenge_method").into(),
+            state: None,
+            scope: optional_string(steps, "scope").map(str::to_owned),
+            nonce: None,
+        })
+        .unwrap_or_else(|e| panic!("{case}: authorize: {e}"));
+    let issued = srv
+        .finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
+        .unwrap();
+    let first = srv
+        .exchange_token(
+            &TokenRequest {
+                grant_type: "authorization_code".into(),
+                code: issued.code,
+                redirect_uri: redirect_uri.into(),
+                client_id: client_id.into(),
+                code_verifier: verifier.into(),
+                refresh_token: String::new(),
+            },
+            now_token,
+        )
+        .unwrap_or_else(|e| panic!("{case}: token: {e}"));
+    let rt = first
+        .refresh_token
+        .clone()
+        .expect("refresh_token on code exchange");
+
+    match action {
+        "refresh" => {
+            let second = srv
+                .exchange_token(
+                    &TokenRequest {
+                        grant_type: "refresh_token".into(),
+                        code: String::new(),
+                        redirect_uri: String::new(),
+                        client_id: client_id.into(),
+                        code_verifier: String::new(),
+                        refresh_token: rt,
+                    },
+                    now_refresh,
+                )
+                .unwrap_or_else(|e| panic!("{case}: refresh: {e}"));
+            assert!(second.refresh_token.is_some(), "{case}");
+            assert!(second.id_token.is_none(), "{case}");
+            let jwks = Jwks::parse(srv.jwks_document().as_bytes()).unwrap();
+            verify::verify(
+                second.access_token.as_bytes(),
+                &jwks,
+                &Policy {
+                    algorithms: vec![Alg::EdDSA],
+                    issuer: Some("https://auth.example".into()),
+                    audience: Some("api".into()),
+                    now: now_refresh,
+                    leeway: 0,
+                    typ: Some("at+jwt".into()),
+                    max_token_bytes: 8192,
+                },
+            )
+            .unwrap();
+        }
+        "refresh_reuse" => {
+            let second = srv
+                .exchange_token(
+                    &TokenRequest {
+                        grant_type: "refresh_token".into(),
+                        code: String::new(),
+                        redirect_uri: String::new(),
+                        client_id: client_id.into(),
+                        code_verifier: String::new(),
+                        refresh_token: rt.clone(),
+                    },
+                    now_refresh,
+                )
+                .unwrap();
+            let err = srv
+                .exchange_token(
+                    &TokenRequest {
+                        grant_type: "refresh_token".into(),
+                        code: String::new(),
+                        redirect_uri: String::new(),
+                        client_id: client_id.into(),
+                        code_verifier: String::new(),
+                        refresh_token: rt,
+                    },
+                    now_refresh + 1,
+                )
+                .expect_err("reuse");
+            assert_eq!(err.code(), string(expect, "error"), "{case}");
+            let rotated = second.refresh_token.expect("rotated");
+            let err2 = srv
+                .exchange_token(
+                    &TokenRequest {
+                        grant_type: "refresh_token".into(),
+                        code: String::new(),
+                        redirect_uri: String::new(),
+                        client_id: client_id.into(),
+                        code_verifier: String::new(),
+                        refresh_token: rotated,
+                    },
+                    now_refresh + 2,
+                )
+                .expect_err("family dead");
+            assert_eq!(err2.code(), "invalid_grant", "{case}");
+        }
+        other => panic!("{case}: unknown action {other}"),
+    }
+}
+
+#[test]
+fn token_lifecycle_vectors() {
+    let files = load_json_vectors(&token_vectors_dir());
+    assert!(!files.is_empty(), "no token vectors");
+    for f in files {
+        run_token_lifecycle_vector(&f);
     }
 }

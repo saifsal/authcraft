@@ -111,6 +111,15 @@ Profile: [ADR 0011](adr/0011-control-plane.md). Narrative: [oauth-m6.md](oauth-m
 | RFC 7591 | Public-client `POST /register` | `testvectors/dcr/` |
 | RFC 7643/7644 SCIM | Users CRUD subset | `oauth::scim` + oauth-http e2e |
 
+## M7 federation
+
+Profile: [ADR 0012](adr/0012-federation.md). Narrative: [oauth-m7.md](oauth-m7.md).
+
+| Specification | In-scope behavior | Evidence |
+|---|---|---|
+| OIDC RP (core) | Outbound authorize + ID token → `LoginSubject` | `oauth::federation::oidc_rp` + e2e stub OP |
+| LDAP bind gateway | `DirectoryBind` / `MemoryDirectory` → `LoginSubject` | `oauth::federation::ldap` + e2e |
+
 ## Other RFCs referenced by the project
 
 Remaining gaps called out in the RFC 9700 checklist (mix-up `iss`, confidential

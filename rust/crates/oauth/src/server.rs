@@ -281,6 +281,7 @@ impl AuthorizationServer {
         Ok(b64url::encode(&bytes))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn mint_access(
         &self,
         subject: &str,

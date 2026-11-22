@@ -1,7 +1,8 @@
 # M4 hardening (PAR + DPoP)
 
-**Status: in progress (PAR + DPoP landed).** Profile:
-[ADR 0009](adr/0009-hardening-par-dpop.md).
+**Status: complete** for the PAR + DPoP + RFC 9700 checklist slice.
+Profile: [ADR 0009](adr/0009-hardening-par-dpop.md).
+BCP map: [rfc-9700-checklist.md](rfc-9700-checklist.md).
 
 ## B1 — PAR
 

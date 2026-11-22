@@ -275,7 +275,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 | **M1** | OAuth 2.0 authorization code flow with PKCE | Complete. `oauth` library + `oauth-http` Axum binder (public clients, S256 required, stub login, in-memory codes, `testvectors/oauth/`). See [ADR 0005](docs/adr/0005-oauth-code-pkce.md) and [docs/oauth-m1.md](docs/oauth-m1.md). |
 | **M2** | OpenID Connect: ID tokens, discovery, userinfo | Complete. `openid` scope → ID token (`nonce`, `at_hash`), discovery, UserInfo, `testvectors/oidc/`. See [ADR 0006](docs/adr/0006-oidc-core-code.md) and [docs/oauth-m2.md](docs/oauth-m2.md). |
 | **M3** | Token lifecycle: refresh rotation, introspection, revocation, key rotation | Complete for B1–B3: rotating refresh, revoke/introspect, signing-key grace JWKS. See [ADR 0008](docs/adr/0008-token-lifecycle.md) and [docs/oauth-m3.md](docs/oauth-m3.md). |
-| **M4** | Hardening: PAR, DPoP, RFC 9700 checklist | In progress. PAR + DPoP landed; RFC 9700 checklist next. See [ADR 0009](docs/adr/0009-hardening-par-dpop.md) and [docs/oauth-m4.md](docs/oauth-m4.md). |
+| **M4** | Hardening: PAR, DPoP, RFC 9700 checklist | Complete for this slice: optional PAR + DPoP, plus [RFC 9700 checklist](docs/rfc-9700-checklist.md). See [ADR 0009](docs/adr/0009-hardening-par-dpop.md) and [docs/oauth-m4.md](docs/oauth-m4.md). |
 | M5 | Authentication: Argon2id passwords, TOTP, WebAuthn | Planned |
 | M6 | Control plane: admin API, dynamic client registration, SCIM 2.0 | Planned |
 | M7 | Federation: OIDC relying-party connector, LDAP gateway | Planned |

@@ -29,11 +29,17 @@ wired into CI.
 2. CI job `fuzz-smoke` on nightly runs each target for 15 seconds.
 3. Stable companion: `jose/tests/parser_smoke.rs` feeds garbage without nightly.
 
-### B3 — OpenID conformance checklist (pending)
+### B3 — OpenID conformance checklist
+
+1. [`docs/openid-conformance-checklist.md`](../openid-conformance-checklist.md)
+   maps Basic OP–style expectations to done/partial/open.
+2. Full OIDF certification suite is **not** executed in CI; operators may run it
+   externally against a deployed demo.
 
 ## Consequences
 
 - Attack harness runs with `cargo test -p oauth --test attack_harness`.
+- Fuzz smoke runs on nightly in CI; stable `parser_smoke` always runs with tests.
 - Full OpenID Foundation certification remains out of scope; the checklist maps
   profiles to done/partial/open.
 

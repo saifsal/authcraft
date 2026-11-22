@@ -120,10 +120,20 @@ Profile: [ADR 0012](adr/0012-federation.md). Narrative: [oauth-m7.md](oauth-m7.m
 | OIDC RP (core) | Outbound authorize + ID token → `LoginSubject` | `oauth::federation::oidc_rp` + e2e stub OP |
 | LDAP bind gateway | `DirectoryBind` / `MemoryDirectory` → `LoginSubject` | `oauth::federation::ldap` + e2e |
 
+## M8 assurance
+
+Profile: [ADR 0013](adr/0013-assurance.md). Narrative: [oauth-m8.md](oauth-m8.md).
+
+| Topic | In-scope behavior | Evidence |
+|---|---|---|
+| Attack harness | Named protocol negatives with stable codes | `oauth/tests/attack_harness.rs` |
+| Fuzz smoke | libFuzzer short runs + stable parser smoke | `rust/fuzz/`, CI `fuzz-smoke`, `jose/tests/parser_smoke.rs` |
+| OpenID conformance map | done/partial/open vs Basic OP expectations | [openid-conformance-checklist.md](openid-conformance-checklist.md) |
+
 ## Other RFCs referenced by the project
 
-Remaining gaps called out in the RFC 9700 checklist (mix-up `iss`, confidential
-clients, required PAR, etc.) are later milestones.
+Remaining gaps called out in the RFC 9700 and OpenID checklists (mix-up `iss`,
+confidential clients, full OIDF suite in CI, etc.) stay operator/follow-on work.
 
 ## Checked-in RFC vectors
 

@@ -270,7 +270,7 @@ fn token_error(err: OAuthError) -> Response {
 async fn jwks(State(state): State<AppState>) -> Response {
     (
         [(header::CONTENT_TYPE, "application/json")],
-        state.server.jwks_document(),
+        state.server.jwks_document_at(now_unix()),
     )
         .into_response()
 }

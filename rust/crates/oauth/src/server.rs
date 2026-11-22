@@ -15,6 +15,7 @@ use crate::code::{AuthorizationCode, CodeStore, DEFAULT_CODE_TTL_SECS};
 use crate::denylist::JtiDenylist;
 use crate::error::OAuthError;
 use crate::id_token::{self, IdTokenClaims};
+use crate::keyring::{Keyring, DEFAULT_VERIFY_GRACE_SECS};
 use crate::pkce::{self, require_s256_method};
 use crate::refresh::{RefreshStore, DEFAULT_REFRESH_TOKEN_TTL_SECS};
 use crate::token::{self, TokenClaims, DEFAULT_ACCESS_TOKEN_TTL_SECS};
@@ -27,6 +28,7 @@ pub struct ServerConfig {
     pub code_ttl_secs: i64,
     pub access_token_ttl_secs: i64,
     pub refresh_token_ttl_secs: i64,
+    pub verify_grace_secs: i64,
 }
 
 impl ServerConfig {
@@ -37,6 +39,7 @@ impl ServerConfig {
             code_ttl_secs: DEFAULT_CODE_TTL_SECS,
             access_token_ttl_secs: DEFAULT_ACCESS_TOKEN_TTL_SECS,
             refresh_token_ttl_secs: DEFAULT_REFRESH_TOKEN_TTL_SECS,
+            verify_grace_secs: DEFAULT_VERIFY_GRACE_SECS,
         }
     }
 }
@@ -171,45 +174,47 @@ pub struct AuthorizationServer {
     codes: Mutex<CodeStore>,
     refresh: Mutex<RefreshStore>,
     denylist: Mutex<JtiDenylist>,
-    pkcs8: Vec<u8>,
-    public: PublicKey,
+    keys: Mutex<Keyring>,
 }
 
 impl AuthorizationServer {
     pub fn new(config: ServerConfig, clients: Vec<Client>, signing: SigningKey) -> Self {
+        let grace = config.verify_grace_secs;
         Self {
             config,
             clients: ClientRegistry::new(clients),
             codes: Mutex::new(CodeStore::new()),
             refresh: Mutex::new(RefreshStore::new()),
             denylist: Mutex::new(JtiDenylist::new()),
-            pkcs8: signing.pkcs8,
-            public: signing.public,
+            keys: Mutex::new(Keyring::from_signing_key(signing, grace)),
         }
     }
 
-    pub fn public_key(&self) -> &PublicKey {
-        &self.public
+    pub fn public_key(&self) -> PublicKey {
+        self.keys
+            .lock()
+            .expect("keys lock")
+            .current()
+            .public
+            .clone()
     }
 
-    /// Builds a JWKS document containing the signing public key.
+    /// Builds a JWKS document containing all keys still within verify grace.
     pub fn jwks_document(&self) -> String {
-        let kid = self.public.thumbprint();
-        match &self.public {
-            PublicKey::Ed25519 { x } => {
-                format!(
-                    r#"{{"keys":[{{"kty":"OKP","crv":"Ed25519","x":"{}","kid":"{kid}","alg":"EdDSA","use":"sig"}}]}}"#,
-                    b64url::encode(x)
-                )
-            }
-            PublicKey::P256 { x, y } => {
-                format!(
-                    r#"{{"keys":[{{"kty":"EC","crv":"P-256","x":"{}","y":"{}","kid":"{kid}","alg":"ES256","use":"sig"}}]}}"#,
-                    b64url::encode(x),
-                    b64url::encode(y)
-                )
-            }
-        }
+        self.jwks_document_at(0)
+    }
+
+    pub fn jwks_document_at(&self, now: i64) -> String {
+        self.keys
+            .lock()
+            .expect("keys lock")
+            .jwks_document(now)
+    }
+
+    /// Rotates the signing key; previous key remains in JWKS until grace ends.
+    pub fn rotate_signing_key(&self, now: i64) -> Result<(), OAuthError> {
+        let mut keys = self.keys.lock().map_err(|_| OAuthError::ServerError)?;
+        keys.rotate(now)
     }
 
     /// OpenID Provider metadata (ADR 0006).
@@ -225,8 +230,8 @@ impl AuthorizationServer {
         access_token: &str,
         now: i64,
     ) -> Result<jose::json::Value, OAuthError> {
-        let jwks =
-            Jwks::parse(self.jwks_document().as_bytes()).map_err(|_| OAuthError::ServerError)?;
+        let jwks = Jwks::parse(self.jwks_document_at(now).as_bytes())
+            .map_err(|_| OAuthError::ServerError)?;
         let verified = verify::verify(
             access_token.as_bytes(),
             &jwks,
@@ -270,9 +275,11 @@ impl AuthorizationServer {
     ) -> Result<(String, i64), OAuthError> {
         let exp = now.saturating_add(self.config.access_token_ttl_secs);
         let jti = Self::new_jti()?;
+        let keys = self.keys.lock().map_err(|_| OAuthError::ServerError)?;
+        let current = keys.current();
         let access_token = token::mint_access_token(
-            &self.pkcs8,
-            &self.public,
+            &current.pkcs8,
+            &current.public,
             &TokenClaims {
                 iss: &self.config.issuer,
                 aud: &self.config.audience,
@@ -391,9 +398,11 @@ impl AuthorizationServer {
         let id_token = if id_token::scope_has_openid(record.scope.as_deref()) {
             let nonce = record.nonce.as_deref().ok_or(OAuthError::ServerError)?;
             let at_hash = id_token::at_hash_eddsa(&access_token);
+            let keys = self.keys.lock().map_err(|_| OAuthError::ServerError)?;
+            let current = keys.current();
             Some(id_token::mint_id_token(
-                &self.pkcs8,
-                &self.public,
+                &current.pkcs8,
+                &current.public,
                 &IdTokenClaims {
                     iss: &self.config.issuer,
                     sub: &record.subject,
@@ -916,6 +925,142 @@ mod tests {
             srv.userinfo(&tok.access_token, 1_001),
             Err(OAuthError::InvalidToken)
         ));
+    }
+
+    #[test]
+    fn rotate_signing_key_keeps_old_verifiable() {
+        let srv = server();
+        let verifier = "a".repeat(43);
+        let mut p = pending(&srv);
+        p.code_challenge = pkce::challenge_s256(&verifier).unwrap();
+        let issued = srv
+            .finish_authorize(p, &LoginSubject::new("alice"), 1_000)
+            .unwrap();
+        let first = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "authorization_code".into(),
+                    code: issued.code,
+                    redirect_uri: "https://app.example/cb".into(),
+                    client_id: "spa".into(),
+                    code_verifier: verifier,
+                    refresh_token: String::new(),
+                },
+                1_001,
+            )
+            .unwrap();
+        srv.rotate_signing_key(1_002).unwrap();
+        let jwks = Jwks::parse(srv.jwks_document_at(1_002).as_bytes()).unwrap();
+        verify::verify(
+            first.access_token.as_bytes(),
+            &jwks,
+            &Policy {
+                algorithms: vec![Alg::EdDSA],
+                issuer: Some("https://auth.example".into()),
+                audience: Some("api".into()),
+                now: 1_002,
+                leeway: 0,
+                typ: Some("at+jwt".into()),
+                max_token_bytes: 8192,
+            },
+        )
+        .expect("old token verifies after rotate");
+
+        let verifier2 = "b".repeat(43);
+        let mut p2 = pending(&srv);
+        p2.code_challenge = pkce::challenge_s256(&verifier2).unwrap();
+        let issued2 = srv
+            .finish_authorize(p2, &LoginSubject::new("bob"), 1_003)
+            .unwrap();
+        let second = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "authorization_code".into(),
+                    code: issued2.code,
+                    redirect_uri: "https://app.example/cb".into(),
+                    client_id: "spa".into(),
+                    code_verifier: verifier2,
+                    refresh_token: String::new(),
+                },
+                1_004,
+            )
+            .unwrap();
+        verify::verify(
+            second.access_token.as_bytes(),
+            &jwks,
+            &Policy {
+                algorithms: vec![Alg::EdDSA],
+                issuer: Some("https://auth.example".into()),
+                audience: Some("api".into()),
+                now: 1_004,
+                leeway: 0,
+                typ: Some("at+jwt".into()),
+                max_token_bytes: 8192,
+            },
+        )
+        .expect("new token verifies");
+
+        // After grace, old key dropped: use a server with short grace.
+        let mut cfg = ServerConfig::new("https://auth.example", "api");
+        cfg.verify_grace_secs = 10;
+        let key = generate_signing_key(Alg::EdDSA).unwrap();
+        let short = AuthorizationServer::new(
+            cfg,
+            vec![Client {
+                client_id: "spa".into(),
+                redirect_uris: vec!["https://app.example/cb".into()],
+            }],
+            key,
+        );
+        let v = "c".repeat(43);
+        let mut p3 = short
+            .begin_authorize(&AuthorizeRequest {
+                response_type: "code".into(),
+                client_id: "spa".into(),
+                redirect_uri: "https://app.example/cb".into(),
+                code_challenge: pkce::challenge_s256(&v).unwrap(),
+                code_challenge_method: "S256".into(),
+                state: None,
+                scope: Some("read".into()),
+                nonce: None,
+            })
+            .unwrap();
+        p3.code_challenge = pkce::challenge_s256(&v).unwrap();
+        let issued3 = short
+            .finish_authorize(p3, &LoginSubject::new("alice"), 2_000)
+            .unwrap();
+        let old = short
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "authorization_code".into(),
+                    code: issued3.code,
+                    redirect_uri: "https://app.example/cb".into(),
+                    client_id: "spa".into(),
+                    code_verifier: v,
+                    refresh_token: String::new(),
+                },
+                2_001,
+            )
+            .unwrap();
+        short.rotate_signing_key(2_002).unwrap();
+        let jwks_late = Jwks::parse(short.jwks_document_at(2_020).as_bytes()).unwrap();
+        assert!(
+            verify::verify(
+                old.access_token.as_bytes(),
+                &jwks_late,
+                &Policy {
+                    algorithms: vec![Alg::EdDSA],
+                    issuer: Some("https://auth.example".into()),
+                    audience: Some("api".into()),
+                    now: 2_020,
+                    leeway: 0,
+                    typ: Some("at+jwt".into()),
+                    max_token_bytes: 8192,
+                },
+            )
+            .is_err(),
+            "old key pruned from JWKS after grace"
+        );
     }
 
     #[test]

@@ -1,27 +1,27 @@
 # M3 token lifecycle
 
-**Status: in progress (B1+B2 landed).** Profile: [ADR 0008](adr/0008-token-lifecycle.md).
+**Status: complete** for the B1–B3 slice. Profile:
+[ADR 0008](adr/0008-token-lifecycle.md).
 
 ## B1 — rotating refresh tokens
 
-| Piece | Location |
-|---|---|
-| Refresh store + rotation | `rust/crates/oauth` (`refresh`) |
-| `grant_type=refresh_token` | `AuthorizationServer::exchange_token` |
-| Protocol vectors | `testvectors/token/` |
-
-Code exchange always returns an opaque `refresh_token`. Refreshing rotates it;
-reuse of a consumed refresh revokes the family (`invalid_grant`). Refresh
-responses do not include `id_token`. Access tokens carry `jti`.
+Opaque `refresh_token` on code exchange; rotation; reuse revokes the family.
+Access tokens carry `jti`. Vectors under `testvectors/token/`.
 
 ## B2 — revoke + introspect
 
-`POST /revoke` and `POST /introspect` on `oauth-http`. Access revoke denylists
-`jti`; refresh revoke kills the family. UserInfo rejects denylisted tokens.
+`POST /revoke` and `POST /introspect`. Access revoke denylists `jti`; refresh
+revoke kills the family. UserInfo rejects denylisted tokens.
+
+## B3 — signing key rotation
+
+`AuthorizationServer::rotate_signing_key(now)` advances the signer; previous
+keys stay in JWKS for `verify_grace_secs` (default 3600). No public rotate
+HTTP route.
 
 ## Run
 
 ```bash
-cargo test -p oauth --test vectors token_lifecycle
+cargo test -p oauth
 cargo test -p oauth-http
 ```

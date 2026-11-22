@@ -9,6 +9,7 @@ pub mod code;
 pub mod denylist;
 pub mod error;
 pub mod id_token;
+pub mod keyring;
 pub mod pkce;
 pub mod refresh;
 pub mod server;

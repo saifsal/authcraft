@@ -52,7 +52,12 @@ lifecycle pieces on the same Rust crates without confidential-client auth.
 
 ### B3 — signing key rotation
 
-*(filled in B3 commit)*
+1. **`Keyring`** holds EdDSA keys; index 0 is the current signer.
+2. **`rotate_signing_key(now)`** generates a new current key; the previous key
+   remains in JWKS until `now + verify_grace_secs` (default **3600**).
+3. JWKS lists all keys still within grace; minting always uses the current key
+   (`kid` = thumbprint). No public HTTP rotate endpoint in the demo — library
+   API + tests only.
 
 ## Consequences
 

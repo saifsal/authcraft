@@ -14,8 +14,8 @@ use axum::{Json, Router};
 use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, LoginSubject, OAuthError, PendingAuthorization,
-    ServerConfig, TokenRequest, TokenTypeHint, DEMO_ADMIN_TOKEN,
+    AuthorizationServer, AuthorizeRequest, Client, DynamicClientRequest, LoginSubject, OAuthError,
+    PendingAuthorization, ServerConfig, TokenRequest, TokenTypeHint, DEMO_ADMIN_TOKEN,
 };
 use serde::Deserialize;
 
@@ -73,6 +73,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/authorize", get(authorize))
         .route("/par", post(par))
+        .route("/register", post(register_client))
         .route("/login", get(login_get).post(login_post))
         .route("/login/mfa", get(mfa_get).post(mfa_post))
         .route("/login/mfa/webauthn/start", post(mfa_webauthn_start))
@@ -300,6 +301,43 @@ pub struct ParForm {
     pub state: Option<String>,
     pub scope: Option<String>,
     pub nonce: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterClientBody {
+    pub redirect_uris: Option<Vec<String>>,
+    pub client_name: Option<String>,
+    pub token_endpoint_auth_method: Option<String>,
+}
+
+async fn register_client(
+    State(state): State<AppState>,
+    Json(body): Json<RegisterClientBody>,
+) -> Response {
+    let req = DynamicClientRequest {
+        redirect_uris: body.redirect_uris.unwrap_or_default(),
+        client_name: body.client_name,
+        token_endpoint_auth_method: body.token_endpoint_auth_method,
+    };
+    match state.server.register_client(&req) {
+        Ok(ok) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "client_id": ok.client_id,
+                "redirect_uris": ok.redirect_uris,
+                "client_name": ok.client_name,
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn par(State(state): State<AppState>, Form(form): Form<ParForm>) -> Response {

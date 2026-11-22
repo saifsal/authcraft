@@ -1,0 +1,14 @@
+{
+  "id": "neg-dcr-empty-redirects",
+  "source": "generated",
+  "description": "Registration without redirect_uris fails.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [],
+    "token_endpoint_auth_method": "none"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

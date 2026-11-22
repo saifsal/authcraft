@@ -273,6 +273,91 @@ fn now_unix() -> i64 {
 }
 
 #[tokio::test]
+async fn dynamic_client_registration_then_token() {
+    let state = AppState::demo();
+    let app = app(state.clone());
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"redirect_uris":["https://dyn.example/cb"],"client_name":"Dyn","token_endpoint_auth_method":"none"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let body = body_string(res).await;
+    let client_id = json_string_field(&body, "client_id").expect("client_id");
+
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let challenge = pkce::challenge_s256(verifier).unwrap();
+    let authorize_uri = format!(
+        "/authorize?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state=dcr",
+        urlencoding_encode(&client_id),
+        urlencoding_encode("https://dyn.example/cb"),
+        urlencoding_encode(&challenge),
+    );
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&authorize_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = cookie_from(&res);
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("username=alice&password=password"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = res
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let code = query_param(&location, "code").expect("code");
+    let form = format!(
+        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+        urlencoding_encode(&code),
+        urlencoding_encode("https://dyn.example/cb"),
+        urlencoding_encode(&client_id),
+        urlencoding_encode(verifier),
+    );
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(json_string_field(&body_string(res).await, "access_token").is_some());
+}
+
+#[tokio::test]
 async fn password_then_webauthn_issues_code() {
     use url::Url;
     use webauthn_authenticator_rs::prelude::WebauthnAuthenticator;

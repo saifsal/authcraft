@@ -1,0 +1,14 @@
+{
+  "id": "neg-dcr-confidential",
+  "source": "generated",
+  "description": "Confidential token_endpoint_auth_method is rejected.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": ["https://dyn.example/cb"],
+    "token_endpoint_auth_method": "client_secret_basic"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

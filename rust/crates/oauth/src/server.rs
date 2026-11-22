@@ -87,6 +87,22 @@ pub struct TotpEnrollment {
     pub otpauth_uri: String,
 }
 
+/// RFC 7591 dynamic client registration request (public clients only).
+#[derive(Debug, Clone)]
+pub struct DynamicClientRequest {
+    pub redirect_uris: Vec<String>,
+    pub client_name: Option<String>,
+    pub token_endpoint_auth_method: Option<String>,
+}
+
+/// RFC 7591 registration response fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DynamicClientSuccess {
+    pub client_id: String,
+    pub redirect_uris: Vec<String>,
+    pub client_name: Option<String>,
+}
+
 /// Validated authorize request awaiting resource-owner authentication.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingAuthorization {
@@ -545,8 +561,39 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":false,"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"scopes_supported":["openid","profile","email"]}}"#
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":false,"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"scopes_supported":["openid","profile","email"]}}"#
         )
+    }
+
+    /// RFC 7591 dynamic registration for public clients (ADR 0011 B2).
+    pub fn register_client(
+        &self,
+        req: &DynamicClientRequest,
+    ) -> Result<DynamicClientSuccess, OAuthError> {
+        if req.redirect_uris.is_empty()
+            || req.redirect_uris.iter().any(|u| u.trim().is_empty())
+        {
+            return Err(OAuthError::InvalidRequest);
+        }
+        if let Some(method) = &req.token_endpoint_auth_method {
+            if method != "none" {
+                return Err(OAuthError::InvalidRequest);
+            }
+        }
+        let client_id = Self::new_jti().map_err(|_| OAuthError::ServerError)?;
+        let client = Client {
+            client_id: client_id.clone(),
+            redirect_uris: req.redirect_uris.clone(),
+            client_name: req.client_name.clone(),
+        };
+        if !self.clients.lock().expect("clients lock").insert(client) {
+            return Err(OAuthError::ServerError);
+        }
+        Ok(DynamicClientSuccess {
+            client_id,
+            redirect_uris: req.redirect_uris.clone(),
+            client_name: req.client_name.clone(),
+        })
     }
 
     fn verify_access_claims(

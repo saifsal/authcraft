@@ -23,7 +23,17 @@ in-process Rust control plane (deferring a separate Go service).
 
 ## Amendments
 
-### B2 — Dynamic client registration (pending)
+### B2 — Dynamic client registration (RFC 7591)
+
+1. `POST /register` (no admin token) accepts JSON `redirect_uris` (≥1), optional
+   `client_name`, and optional `token_endpoint_auth_method` which must be `none`.
+2. Issues opaque `client_id` (random base64url). No `client_secret`, no
+   registration access token, no RFC 7592 management endpoint.
+3. Response includes `token_endpoint_auth_method: "none"`,
+   `grant_types: ["authorization_code","refresh_token"]`,
+   `response_types: ["code"]`. PKCE S256 remains required by the AS.
+4. Discovery advertises `registration_endpoint` and
+   `token_endpoint_auth_methods_supported: ["none"]`.
 
 ### B3 — SCIM 2.0 Users (pending)
 

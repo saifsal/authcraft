@@ -216,8 +216,14 @@ fn attack_refresh_token_reuse() {
     assert_eq!(err.code(), "invalid_grant");
 }
 
-fn make_dpop_proof(htm: &str, htu: &str, iat: i64, jti: &str) -> String {
-    let key = generate_signing_key(Alg::EdDSA).unwrap();
+fn make_dpop_proof(
+    key: &jose::signing::SigningKey,
+    htm: &str,
+    htu: &str,
+    iat: i64,
+    jti: &str,
+    nonce: Option<&str>,
+) -> String {
     let x = match &key.public {
         PublicKey::Ed25519 { x } => b64url::encode(x),
         _ => panic!("eddsa"),
@@ -225,7 +231,12 @@ fn make_dpop_proof(htm: &str, htu: &str, iat: i64, jti: &str) -> String {
     let header = format!(
         r#"{{"typ":"dpop+jwt","alg":"EdDSA","jwk":{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}}}"#
     );
-    let payload = format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}"}}"#);
+    let payload = match nonce {
+        Some(n) => {
+            format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}","nonce":"{n}"}}"#)
+        }
+        None => format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}"}}"#),
+    };
     let enc_h = b64url::encode(header.as_bytes());
     let enc_p = b64url::encode(payload.as_bytes());
     let input = format!("{enc_h}.{enc_p}");
@@ -233,27 +244,47 @@ fn make_dpop_proof(htm: &str, htu: &str, iat: i64, jti: &str) -> String {
     format!("{input}.{}", b64url::encode(&sig))
 }
 
+fn exchange_with_dpop(
+    srv: &AuthorizationServer,
+    req: &TokenRequest,
+    now: i64,
+    htu: &str,
+    key: &jose::signing::SigningKey,
+    jti: &str,
+) -> oauth::TokenSuccess {
+    let probe = make_dpop_proof(key, "POST", htu, now, &format!("{jti}-probe"), None);
+    match srv.exchange_token(req, now, Some(&probe), htu) {
+        Err(oauth::OAuthError::UseDpopNonce) => {
+            let n = srv.dpop_nonce().unwrap();
+            let proof = make_dpop_proof(key, "POST", htu, now, jti, Some(&n));
+            srv.exchange_token(req, now, Some(&proof), htu).unwrap()
+        }
+        Ok(t) => t,
+        Err(e) => panic!("unexpected {e}"),
+    }
+}
+
 #[test]
 fn attack_dpop_bound_refresh_without_proof() {
     let srv = server();
     let (verifier, challenge) = s256_pair();
     let code = authorize_and_finish(&srv, &challenge, "alice");
-    let proof = make_dpop_proof("POST", "https://auth.example/token", 1_001, "rt-1");
-    let tok = srv
-        .exchange_token(
-            &TokenRequest {
-                grant_type: "authorization_code".into(),
-                code,
-                redirect_uri: "https://app.example/cb".into(),
-                client_id: "spa".into(),
-                code_verifier: verifier,
-                refresh_token: String::new(),
-            },
-            1_001,
-            Some(&proof),
-            "https://auth.example/token",
-        )
-        .unwrap();
+    let key = generate_signing_key(Alg::EdDSA).unwrap();
+    let tok = exchange_with_dpop(
+        &srv,
+        &TokenRequest {
+            grant_type: "authorization_code".into(),
+            code,
+            redirect_uri: "https://app.example/cb".into(),
+            client_id: "spa".into(),
+            code_verifier: verifier,
+            refresh_token: String::new(),
+        },
+        1_001,
+        "https://auth.example/token",
+        &key,
+        "rt-1",
+    );
     let refresh = tok.refresh_token.expect("refresh");
     let err = srv
         .exchange_token(
@@ -272,7 +303,37 @@ fn attack_dpop_bound_refresh_without_proof() {
         .expect_err("bound refresh needs DPoP");
     assert_eq!(err.code(), "invalid_grant");
     // Proof with a different key must also fail, without consuming the token.
-    let other = make_dpop_proof("POST", "https://auth.example/token", 1_002, "rt-2");
+    let other_key = generate_signing_key(Alg::EdDSA).unwrap();
+    let probe = make_dpop_proof(
+        &other_key,
+        "POST",
+        "https://auth.example/token",
+        1_002,
+        "rt-2-probe",
+        None,
+    );
+    let _ = srv.exchange_token(
+        &TokenRequest {
+            grant_type: "refresh_token".into(),
+            code: String::new(),
+            redirect_uri: String::new(),
+            client_id: "spa".into(),
+            code_verifier: String::new(),
+            refresh_token: refresh.clone(),
+        },
+        1_002,
+        Some(&probe),
+        "https://auth.example/token",
+    );
+    let n = srv.dpop_nonce().unwrap();
+    let other = make_dpop_proof(
+        &other_key,
+        "POST",
+        "https://auth.example/token",
+        1_002,
+        "rt-2",
+        Some(&n),
+    );
     let err = srv
         .exchange_token(
             &TokenRequest {
@@ -289,6 +350,54 @@ fn attack_dpop_bound_refresh_without_proof() {
         )
         .expect_err("wrong jkt");
     assert_eq!(err.code(), "invalid_grant");
+}
+
+#[test]
+fn attack_dpop_missing_nonce() {
+    let srv = server();
+    let (verifier, challenge) = s256_pair();
+    let code = authorize_and_finish(&srv, &challenge, "alice");
+    let key = generate_signing_key(Alg::EdDSA).unwrap();
+    let proof = make_dpop_proof(
+        &key,
+        "POST",
+        "https://auth.example/token",
+        1_001,
+        "nonce-miss",
+        None,
+    );
+    let err = srv
+        .exchange_token(
+            &TokenRequest {
+                grant_type: "authorization_code".into(),
+                code: code.clone(),
+                redirect_uri: "https://app.example/cb".into(),
+                client_id: "spa".into(),
+                code_verifier: verifier.clone(),
+                refresh_token: String::new(),
+            },
+            1_001,
+            Some(&proof),
+            "https://auth.example/token",
+        )
+        .expect_err("nonce required");
+    assert_eq!(err.code(), "use_dpop_nonce");
+    // Code must still be redeemable after the challenge.
+    let _ = exchange_with_dpop(
+        &srv,
+        &TokenRequest {
+            grant_type: "authorization_code".into(),
+            code,
+            redirect_uri: "https://app.example/cb".into(),
+            client_id: "spa".into(),
+            code_verifier: verifier,
+            refresh_token: String::new(),
+        },
+        1_001,
+        "https://auth.example/token",
+        &key,
+        "nonce-ok",
+    );
 }
 
 #[test]

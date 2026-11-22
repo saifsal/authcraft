@@ -1170,7 +1170,27 @@ async fn token(
             if let Some(refresh_token) = tok.refresh_token {
                 body["refresh_token"] = serde_json::Value::String(refresh_token);
             }
-            Json(body).into_response()
+            let mut resp = Json(body).into_response();
+            if let Some(nonce) = tok.dpop_nonce {
+                if let Ok(v) = HeaderValue::from_str(&nonce) {
+                    resp.headers_mut().insert("dpop-nonce", v);
+                }
+            }
+            resp
+        }
+        Err(OAuthError::UseDpopNonce) => {
+            let nonce = state.server.dpop_nonce().unwrap_or_default();
+            let mut resp = (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "use_dpop_nonce",
+                })),
+            )
+                .into_response();
+            if let Ok(v) = HeaderValue::from_str(&nonce) {
+                resp.headers_mut().insert("dpop-nonce", v);
+            }
+            resp
         }
         Err(err) => token_error(err),
     }
@@ -1180,7 +1200,7 @@ fn token_error(err: OAuthError) -> Response {
     let status = match err {
         OAuthError::InvalidRequest | OAuthError::UnsupportedGrantType => StatusCode::BAD_REQUEST,
         OAuthError::UnauthorizedClient | OAuthError::InvalidToken => StatusCode::UNAUTHORIZED,
-        OAuthError::InvalidGrant => StatusCode::BAD_REQUEST,
+        OAuthError::InvalidGrant | OAuthError::UseDpopNonce => StatusCode::BAD_REQUEST,
         OAuthError::ServerError => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (
@@ -1242,6 +1262,18 @@ async fn userinfo(State(state): State<AppState>, headers: HeaderMap) -> Response
                 body["email"] = serde_json::Value::String(email);
             }
             Json(body).into_response()
+        }
+        Err(OAuthError::UseDpopNonce) => {
+            let nonce = state.server.dpop_nonce().unwrap_or_default();
+            let mut resp = (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "use_dpop_nonce" })),
+            )
+                .into_response();
+            if let Ok(v) = HeaderValue::from_str(&nonce) {
+                resp.headers_mut().insert("dpop-nonce", v);
+            }
+            resp
         }
         Err(err) => (
             StatusCode::UNAUTHORIZED,

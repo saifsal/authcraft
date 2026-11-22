@@ -50,15 +50,25 @@ access tokens. M4 adds those without confidential-client auth or real login.
    mismatch or missing proof → `invalid_grant` (proof checked before rotate).
 3. Unbound (Bearer) refresh families stay optional-DPoP as before.
 
+### B5 — DPoP nonce from the AS
+
+1. Every DPoP proof at `/token` and DPoP-bound `/userinfo` must include a
+   `nonce` matching the AS current value; otherwise `use_dpop_nonce`.
+2. HTTP responses carry `DPoP-Nonce` on success (next nonce) and on
+   `use_dpop_nonce` (current challenge). Proof verification runs before
+   authorization-code redeem / refresh rotate so a nonce challenge is retryable.
+3. Nonce is checked before the proof `jti` is stored, so a challenge does not
+   burn the client's jti.
+
 ## Consequences
 
 - Front-channel authorization queries stay short when clients use PAR.
 - Existing M1/M2/M3 demos keep working without PAR.
 - Clients can detect authorization-server mix-up via `iss`.
 - Stolen DPoP-bound refresh tokens are useless without the proof key.
+- DPoP proofs are single-use against a fresh AS nonce (replay harder).
 
 ## Alternatives considered
 
 - **Require PAR for all clients.** Rejected for this educational slice.
 - **JAR / request objects.** Deferred; PAR body is enough for M4.
-- **DPoP-Nonce from the AS.** Still open on the RFC 9700 checklist.

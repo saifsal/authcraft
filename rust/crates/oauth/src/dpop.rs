@@ -44,18 +44,22 @@ impl DpopJtiCache {
 }
 
 /// Verified DPoP proof summary.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DpopProof {
     pub jkt: String,
 }
 
 /// Verifies a compact DPoP proof JWT for `htm`/`htu` at `now`.
+///
+/// When `expected_nonce` is `Some`, the proof must carry a matching `nonce`
+/// claim; otherwise [`OAuthError::UseDpopNonce`].
 pub fn verify_proof(
     proof: &str,
     htm: &str,
     htu: &str,
     now: i64,
     jti_cache: &mut DpopJtiCache,
+    expected_nonce: Option<&str>,
 ) -> Result<DpopProof, OAuthError> {
     let mut parts = proof.split('.');
     let header_b64 = parts.next().ok_or(OAuthError::InvalidRequest)?;
@@ -105,6 +109,12 @@ pub fn verify_proof(
         .ok_or(OAuthError::InvalidRequest)?;
     if (now - iat).abs() > DPOP_IAT_LEEWAY_SECS {
         return Err(OAuthError::InvalidRequest);
+    }
+    if let Some(expected) = expected_nonce {
+        let got = payload.get("nonce").and_then(Value::as_str).unwrap_or("");
+        if got != expected {
+            return Err(OAuthError::UseDpopNonce);
+        }
     }
     let jti = payload
         .get("jti")
@@ -168,6 +178,7 @@ mod tests {
             "https://auth.example/token",
             1_000,
             &mut cache,
+            None,
         )
         .unwrap();
         assert_eq!(out.jkt, jkt);
@@ -177,6 +188,7 @@ mod tests {
             "https://auth.example/token",
             1_001,
             &mut cache,
+            None,
         )
         .is_err());
     }
@@ -191,7 +203,25 @@ mod tests {
             "https://auth.example/other",
             1_000,
             &mut cache,
+            None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn requires_matching_nonce_when_expected() {
+        let (proof, _) = make_proof("POST", "https://auth.example/token", 1_000, "j3");
+        let mut cache = DpopJtiCache::new();
+        assert_eq!(
+            verify_proof(
+                &proof,
+                "POST",
+                "https://auth.example/token",
+                1_000,
+                &mut cache,
+                Some("n1"),
+            ),
+            Err(OAuthError::UseDpopNonce)
+        );
     }
 }

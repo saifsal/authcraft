@@ -19,7 +19,7 @@ Educational mapping of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
 | Mix-up mitigation (`iss` on AS responses) | done | RFC 9207 `iss` on authorize success redirects |
 | Confidential clients / client auth | open | Public clients only |
 | PAR required for public clients | open | `require_pushed_authorization_requests=false` |
-| DPoP nonce from AS | open | Clock-skew `iat` only |
+| DPoP nonce from AS | done | `use_dpop_nonce` + `DPoP-Nonce` header (ADR 0009 B5) |
 | Real resource-owner authentication | done | Argon2id + optional TOTP/WebAuthn 2FA (M5); stub login removed |
 | TLS / production deployment | open | Local demo binds only |
 | Sender-constrained refresh (DPoP) | done | Refresh family stores `jkt` when issued with DPoP |

@@ -15,7 +15,7 @@ use oauth::pkce;
 use oauth::totp;
 use oauth::{
     hash_password, AuthorizationServer, AuthorizeRequest, Client, DynamicClientRequest,
-    LoginSubject, ServerConfig, TokenRequest, UserRecord, DEMO_ADMIN_TOKEN,
+    LoginSubject, OAuthError, ServerConfig, TokenRequest, UserRecord, DEMO_ADMIN_TOKEN,
 };
 
 fn oauth_vectors_dir() -> PathBuf {
@@ -50,7 +50,15 @@ fn dcr_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/dcr")
 }
 
-fn make_dpop_proof(htm: &str, htu: &str, iat: i64, jti: &str, pkcs8: &[u8], public: &PublicKey) -> String {
+fn make_dpop_proof(
+    htm: &str,
+    htu: &str,
+    iat: i64,
+    jti: &str,
+    pkcs8: &[u8],
+    public: &PublicKey,
+    nonce: Option<&str>,
+) -> String {
     let x = match public {
         PublicKey::Ed25519 { x } => b64url::encode(x),
         _ => panic!("eddsa"),
@@ -58,7 +66,12 @@ fn make_dpop_proof(htm: &str, htu: &str, iat: i64, jti: &str, pkcs8: &[u8], publ
     let header = format!(
         r#"{{"typ":"dpop+jwt","alg":"EdDSA","jwk":{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}}}"#
     );
-    let payload = format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}"}}"#);
+    let payload = match nonce {
+        Some(n) => {
+            format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}","nonce":"{n}"}}"#)
+        }
+        None => format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}"}}"#),
+    };
     let enc_h = b64url::encode(header.as_bytes());
     let enc_p = b64url::encode(payload.as_bytes());
     let input = format!("{enc_h}.{enc_p}");
@@ -622,32 +635,50 @@ fn run_dpop_vector(path: &Path) {
     let token_htu = "https://auth.example/token";
     let userinfo_htu = "https://auth.example/userinfo";
 
+    let req = TokenRequest {
+        grant_type: "authorization_code".into(),
+        code: issued.code.clone(),
+        redirect_uri: redirect_uri.into(),
+        client_id: client_id.into(),
+        code_verifier: verifier.into(),
+        refresh_token: String::new(),
+    };
+
+    let exchange_ok = |srv: &AuthorizationServer, jti: &str| {
+        let probe = make_dpop_proof(
+            "POST",
+            token_htu,
+            now_token,
+            &format!("{jti}-probe"),
+            &dpop_key.pkcs8,
+            &dpop_key.public,
+            None,
+        );
+        match srv.exchange_token(&req, now_token, Some(&probe), token_htu) {
+            Err(OAuthError::UseDpopNonce) => {
+                let n = srv.dpop_nonce().unwrap();
+                let proof = make_dpop_proof(
+                    "POST",
+                    token_htu,
+                    now_token,
+                    jti,
+                    &dpop_key.pkcs8,
+                    &dpop_key.public,
+                    Some(&n),
+                );
+                srv.exchange_token(&req, now_token, Some(&proof), token_htu)
+                    .unwrap()
+            }
+            Ok(t) => t,
+            Err(e) => panic!("{case}: unexpected {e}"),
+        }
+    };
+
     match action {
         "dpop_bind" => {
-            let proof = make_dpop_proof(
-                "POST",
-                token_htu,
-                now_token,
-                "j-bind",
-                &dpop_key.pkcs8,
-                &dpop_key.public,
-            );
-            let tok = srv
-                .exchange_token(
-                    &TokenRequest {
-                        grant_type: "authorization_code".into(),
-                        code: issued.code,
-                        redirect_uri: redirect_uri.into(),
-                        client_id: client_id.into(),
-                        code_verifier: verifier.into(),
-                        refresh_token: String::new(),
-                    },
-                    now_token,
-                    Some(&proof),
-                    token_htu,
-                )
-                .unwrap();
+            let tok = exchange_ok(&srv, "j-bind");
             assert_eq!(tok.token_type, string(expect, "token_type"));
+            let ui_nonce = tok.dpop_nonce.expect("dpop_nonce after bind");
             let proof2 = make_dpop_proof(
                 "GET",
                 userinfo_htu,
@@ -655,6 +686,7 @@ fn run_dpop_vector(path: &Path) {
                 "j-ui",
                 &dpop_key.pkcs8,
                 &dpop_key.public,
+                Some(&ui_nonce),
             );
             let info = srv
                 .userinfo(&tok.access_token, now_token, Some(&proof2), userinfo_htu)
@@ -662,6 +694,18 @@ fn run_dpop_vector(path: &Path) {
             assert_eq!(info.sub, string(steps, "subject"));
         }
         "dpop_bad_htu" => {
+            // Obtain a nonce first with a well-formed probe, then fail on htu.
+            let probe = make_dpop_proof(
+                "POST",
+                token_htu,
+                now_token,
+                "j-bad-probe",
+                &dpop_key.pkcs8,
+                &dpop_key.public,
+                None,
+            );
+            let _ = srv.exchange_token(&req, now_token, Some(&probe), token_htu);
+            let n = srv.dpop_nonce().unwrap();
             let proof = make_dpop_proof(
                 "POST",
                 "https://auth.example/wrong",
@@ -669,48 +713,15 @@ fn run_dpop_vector(path: &Path) {
                 "j-bad",
                 &dpop_key.pkcs8,
                 &dpop_key.public,
+                Some(&n),
             );
             let err = srv
-                .exchange_token(
-                    &TokenRequest {
-                        grant_type: "authorization_code".into(),
-                        code: issued.code,
-                        redirect_uri: redirect_uri.into(),
-                        client_id: client_id.into(),
-                        code_verifier: verifier.into(),
-                        refresh_token: String::new(),
-                    },
-                    now_token,
-                    Some(&proof),
-                    token_htu,
-                )
+                .exchange_token(&req, now_token, Some(&proof), token_htu)
                 .expect_err("bad htu");
             assert_eq!(err.code(), string(expect, "error"), "{case}");
         }
         "dpop_userinfo_missing" => {
-            let proof = make_dpop_proof(
-                "POST",
-                token_htu,
-                now_token,
-                "j-miss",
-                &dpop_key.pkcs8,
-                &dpop_key.public,
-            );
-            let tok = srv
-                .exchange_token(
-                    &TokenRequest {
-                        grant_type: "authorization_code".into(),
-                        code: issued.code,
-                        redirect_uri: redirect_uri.into(),
-                        client_id: client_id.into(),
-                        code_verifier: verifier.into(),
-                        refresh_token: String::new(),
-                    },
-                    now_token,
-                    Some(&proof),
-                    token_htu,
-                )
-                .unwrap();
+            let tok = exchange_ok(&srv, "j-miss");
             let err = srv
                 .userinfo(&tok.access_token, now_token, None, userinfo_htu)
                 .expect_err("missing proof");

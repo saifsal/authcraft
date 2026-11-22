@@ -152,6 +152,8 @@ pub struct TokenSuccess {
     pub expires_in: i64,
     pub id_token: Option<String>,
     pub refresh_token: Option<String>,
+    /// Next `DPoP-Nonce` value when this response used DPoP (RFC 9449).
+    pub dpop_nonce: Option<String>,
 }
 
 /// Authorize query parameters (already decoded by the HTTP layer).
@@ -281,6 +283,8 @@ pub struct AuthorizationServer {
     keys: Mutex<Keyring>,
     par: Mutex<ParStore>,
     dpop_jtis: Mutex<DpopJtiCache>,
+    /// Current AS-issued DPoP nonce (RFC 9449).
+    dpop_nonce: Mutex<String>,
     users: Mutex<UserStore>,
     webauthn: WebauthnMfa,
 }
@@ -299,9 +303,29 @@ impl AuthorizationServer {
             keys: Mutex::new(Keyring::from_signing_key(signing, grace)),
             par: Mutex::new(ParStore::new()),
             dpop_jtis: Mutex::new(DpopJtiCache::new()),
+            dpop_nonce: Mutex::new(String::new()),
             users: Mutex::new(UserStore::new()),
             webauthn,
         }
+    }
+
+    /// Current `DPoP-Nonce` value for challenge responses (creates one if empty).
+    pub fn dpop_nonce(&self) -> Result<String, OAuthError> {
+        self.ensure_dpop_nonce()
+    }
+
+    fn ensure_dpop_nonce(&self) -> Result<String, OAuthError> {
+        let mut slot = self.dpop_nonce.lock().map_err(|_| OAuthError::ServerError)?;
+        if slot.is_empty() {
+            *slot = Self::new_jti()?;
+        }
+        Ok(slot.clone())
+    }
+
+    fn rotate_dpop_nonce(&self) -> Result<String, OAuthError> {
+        let mut slot = self.dpop_nonce.lock().map_err(|_| OAuthError::ServerError)?;
+        *slot = Self::new_jti()?;
+        Ok(slot.clone())
     }
 
     fn require_admin(&self, token: Option<&str>) -> Result<(), AdminError> {
@@ -771,13 +795,17 @@ impl AuthorizationServer {
         dpop_proof: Option<&str>,
         htu: &str,
         now: i64,
-    ) -> Result<Option<String>, OAuthError> {
+    ) -> Result<(Option<String>, Option<String>), OAuthError> {
         let Some(proof) = dpop_proof.filter(|p| !p.is_empty()) else {
-            return Ok(None);
+            return Ok((None, None));
         };
+        let expected = self.ensure_dpop_nonce()?;
         let mut cache = self.dpop_jtis.lock().map_err(|_| OAuthError::ServerError)?;
-        let verified = dpop::verify_proof(proof, "POST", htu, now, &mut cache)?;
-        Ok(Some(verified.jkt))
+        let verified =
+            dpop::verify_proof(proof, "POST", htu, now, &mut cache, Some(&expected))?;
+        drop(cache);
+        let next = self.rotate_dpop_nonce()?;
+        Ok((Some(verified.jkt), Some(next)))
     }
 
     /// Pushes authorize parameters and returns a one-time `request_uri` (ADR 0009).
@@ -938,6 +966,11 @@ impl AuthorizationServer {
     ) -> Result<TokenSuccess, OAuthError> {
         self.lookup_client(&req.client_id)?;
 
+        // DPoP (including nonce challenge) before redeem so `use_dpop_nonce`
+        // does not consume the authorization code.
+        let (jkt, dpop_nonce) = self.resolve_dpop(dpop_proof, token_htu, now)?;
+        let token_type = if jkt.is_some() { "DPoP" } else { "Bearer" };
+
         let mut store = self.codes.lock().map_err(|_| OAuthError::ServerError)?;
         let record = store.redeem(&req.code, now)?;
         drop(store);
@@ -946,9 +979,6 @@ impl AuthorizationServer {
             return Err(OAuthError::InvalidGrant);
         }
         pkce::verify_s256(&req.code_verifier, &record.code_challenge)?;
-
-        let jkt = self.resolve_dpop(dpop_proof, token_htu, now)?;
-        let token_type = if jkt.is_some() { "DPoP" } else { "Bearer" };
 
         let (access_token, exp) = self.mint_access(
             &record.subject,
@@ -1002,6 +1032,7 @@ impl AuthorizationServer {
             expires_in: self.config.access_token_ttl_secs,
             id_token,
             refresh_token: Some(refresh_token),
+            dpop_nonce,
         })
     }
 
@@ -1025,7 +1056,7 @@ impl AuthorizationServer {
                 .get_active(&req.refresh_token)
                 .and_then(|r| r.dpop_jkt.clone())
         };
-        let jkt = self.resolve_dpop(dpop_proof, token_htu, now)?;
+        let (jkt, dpop_nonce) = self.resolve_dpop(dpop_proof, token_htu, now)?;
         if let Some(bound) = bound_jkt.as_deref() {
             match jkt.as_deref() {
                 Some(presented) if presented == bound => {}
@@ -1057,6 +1088,7 @@ impl AuthorizationServer {
             expires_in: self.config.access_token_ttl_secs,
             id_token: None,
             refresh_token: Some(refresh_token),
+            dpop_nonce,
         })
     }
 
@@ -1077,13 +1109,25 @@ impl AuthorizationServer {
             .and_then(|v| v.as_str())
         {
             let proof = dpop_proof.filter(|p| !p.is_empty()).ok_or(OAuthError::InvalidToken)?;
+            let expected = self.ensure_dpop_nonce()?;
             let mut cache = self.dpop_jtis.lock().map_err(|_| OAuthError::ServerError)?;
-            let verified =
-                dpop::verify_proof(proof, "GET", userinfo_htu, now, &mut cache)
-                    .map_err(|_| OAuthError::InvalidToken)?;
+            let verified = match dpop::verify_proof(
+                proof,
+                "GET",
+                userinfo_htu,
+                now,
+                &mut cache,
+                Some(&expected),
+            ) {
+                Ok(v) => v,
+                Err(OAuthError::UseDpopNonce) => return Err(OAuthError::UseDpopNonce),
+                Err(_) => return Err(OAuthError::InvalidToken),
+            };
             if verified.jkt != jkt {
                 return Err(OAuthError::InvalidToken);
             }
+            drop(cache);
+            let _ = self.rotate_dpop_nonce()?;
         }
         let sub = claims
             .get("sub")
@@ -1721,26 +1765,59 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dpop_token_requires_proof_at_userinfo() {
-        use jose::signing::{self, generate_signing_key as gen};
-        let dpop_key = gen(Alg::EdDSA).unwrap();
-        let jkt = dpop_key.public.thumbprint();
-        let x = match &dpop_key.public {
+    fn sign_dpop_proof(
+        key: &SigningKey,
+        htm: &str,
+        htu: &str,
+        iat: i64,
+        jti: &str,
+        nonce: Option<&str>,
+    ) -> String {
+        use jose::signing;
+        let x = match &key.public {
             PublicKey::Ed25519 { x } => b64url::encode(x),
             _ => panic!(),
         };
         let header = format!(
             r#"{{"typ":"dpop+jwt","alg":"EdDSA","jwk":{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}}}"#
         );
-        let payload =
-            r#"{"htm":"POST","htu":"https://auth.example/token","iat":1001,"jti":"dpop-1"}"#;
+        let payload = match nonce {
+            Some(n) => format!(
+                r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}","nonce":"{n}"}}"#
+            ),
+            None => format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":{iat},"jti":"{jti}"}}"#),
+        };
         let enc_h = b64url::encode(header.as_bytes());
         let enc_p = b64url::encode(payload.as_bytes());
         let input = format!("{enc_h}.{enc_p}");
-        let sig = signing::sign(Alg::EdDSA, &dpop_key.pkcs8, input.as_bytes()).unwrap();
-        let proof = format!("{input}.{}", b64url::encode(&sig));
+        let sig = signing::sign(Alg::EdDSA, &key.pkcs8, input.as_bytes()).unwrap();
+        format!("{input}.{}", b64url::encode(&sig))
+    }
 
+    fn exchange_with_dpop_nonce(
+        srv: &AuthorizationServer,
+        req: &TokenRequest,
+        now: i64,
+        htu: &str,
+        key: &SigningKey,
+        jti: &str,
+    ) -> TokenSuccess {
+        let probe = sign_dpop_proof(key, "POST", htu, now, &format!("{jti}-probe"), None);
+        match srv.exchange_token(req, now, Some(&probe), htu) {
+            Err(OAuthError::UseDpopNonce) => {
+                let n = srv.dpop_nonce().unwrap();
+                let proof = sign_dpop_proof(key, "POST", htu, now, jti, Some(&n));
+                srv.exchange_token(req, now, Some(&proof), htu).unwrap()
+            }
+            Ok(t) => t,
+            Err(e) => panic!("unexpected {e}"),
+        }
+    }
+
+    #[test]
+    fn dpop_token_requires_proof_at_userinfo() {
+        use jose::signing::generate_signing_key as gen;
+        let dpop_key = gen(Alg::EdDSA).unwrap();
         let srv = server();
         let verifier = "a".repeat(43);
         let mut p = pending(&srv);
@@ -1748,22 +1825,23 @@ mod tests {
         let issued = srv
             .finish_authorize(p, &LoginSubject::new("alice"), 1_000)
             .unwrap();
-        let tok = srv
-            .exchange_token(
-                &TokenRequest {
-                    grant_type: "authorization_code".into(),
-                    code: issued.code,
-                    redirect_uri: "https://app.example/cb".into(),
-                    client_id: "spa".into(),
-                    code_verifier: verifier,
-                    refresh_token: String::new(),
-                },
-                1_001,
-                Some(&proof),
-                "https://auth.example/token",
-            )
-            .unwrap();
+        let tok = exchange_with_dpop_nonce(
+            &srv,
+            &TokenRequest {
+                grant_type: "authorization_code".into(),
+                code: issued.code,
+                redirect_uri: "https://app.example/cb".into(),
+                client_id: "spa".into(),
+                code_verifier: verifier,
+                refresh_token: String::new(),
+            },
+            1_001,
+            "https://auth.example/token",
+            &dpop_key,
+            "dpop-1",
+        );
         assert_eq!(tok.token_type, "DPoP");
+        assert!(tok.dpop_nonce.is_some());
         assert!(matches!(
             srv.userinfo(
                 &tok.access_token,
@@ -1774,12 +1852,15 @@ mod tests {
             Err(OAuthError::InvalidToken)
         ));
 
-        let payload2 =
-            r#"{"htm":"GET","htu":"https://auth.example/userinfo","iat":1001,"jti":"dpop-2"}"#;
-        let enc_p2 = b64url::encode(payload2.as_bytes());
-        let input2 = format!("{enc_h}.{enc_p2}");
-        let sig2 = signing::sign(Alg::EdDSA, &dpop_key.pkcs8, input2.as_bytes()).unwrap();
-        let proof2 = format!("{input2}.{}", b64url::encode(&sig2));
+        let ui_nonce = tok.dpop_nonce.clone().unwrap();
+        let proof2 = sign_dpop_proof(
+            &dpop_key,
+            "GET",
+            "https://auth.example/userinfo",
+            1_001,
+            "dpop-2",
+            Some(&ui_nonce),
+        );
         let info = srv
             .userinfo(
                 &tok.access_token,
@@ -1789,29 +1870,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(info.sub, "alice");
-        let _ = jkt;
     }
 
     #[test]
     fn dpop_bound_refresh_accepts_matching_proof() {
-        use jose::signing::{self, generate_signing_key as gen};
+        use jose::signing::generate_signing_key as gen;
         let dpop_key = gen(Alg::EdDSA).unwrap();
-        let x = match &dpop_key.public {
-            PublicKey::Ed25519 { x } => b64url::encode(x),
-            _ => panic!(),
-        };
-        let header = format!(
-            r#"{{"typ":"dpop+jwt","alg":"EdDSA","jwk":{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}}}"#
-        );
-        let enc_h = b64url::encode(header.as_bytes());
-        let mk = |htm: &str, htu: &str, jti: &str| {
-            let payload = format!(r#"{{"htm":"{htm}","htu":"{htu}","iat":1001,"jti":"{jti}"}}"#);
-            let enc_p = b64url::encode(payload.as_bytes());
-            let input = format!("{enc_h}.{enc_p}");
-            let sig = signing::sign(Alg::EdDSA, &dpop_key.pkcs8, input.as_bytes()).unwrap();
-            format!("{input}.{}", b64url::encode(&sig))
-        };
-
         let srv = server();
         let verifier = "a".repeat(43);
         let mut p = pending(&srv);
@@ -1819,37 +1883,37 @@ mod tests {
         let issued = srv
             .finish_authorize(p, &LoginSubject::new("alice"), 1_000)
             .unwrap();
-        let tok = srv
-            .exchange_token(
-                &TokenRequest {
-                    grant_type: "authorization_code".into(),
-                    code: issued.code,
-                    redirect_uri: "https://app.example/cb".into(),
-                    client_id: "spa".into(),
-                    code_verifier: verifier,
-                    refresh_token: String::new(),
-                },
-                1_001,
-                Some(&mk("POST", "https://auth.example/token", "code-1")),
-                "https://auth.example/token",
-            )
-            .unwrap();
+        let tok = exchange_with_dpop_nonce(
+            &srv,
+            &TokenRequest {
+                grant_type: "authorization_code".into(),
+                code: issued.code,
+                redirect_uri: "https://app.example/cb".into(),
+                client_id: "spa".into(),
+                code_verifier: verifier,
+                refresh_token: String::new(),
+            },
+            1_001,
+            "https://auth.example/token",
+            &dpop_key,
+            "code-1",
+        );
         let rt = tok.refresh_token.unwrap();
-        let rotated = srv
-            .exchange_token(
-                &TokenRequest {
-                    grant_type: "refresh_token".into(),
-                    code: String::new(),
-                    redirect_uri: String::new(),
-                    client_id: "spa".into(),
-                    code_verifier: String::new(),
-                    refresh_token: rt,
-                },
-                1_001,
-                Some(&mk("POST", "https://auth.example/token", "rt-ok")),
-                "https://auth.example/token",
-            )
-            .unwrap();
+        let rotated = exchange_with_dpop_nonce(
+            &srv,
+            &TokenRequest {
+                grant_type: "refresh_token".into(),
+                code: String::new(),
+                redirect_uri: String::new(),
+                client_id: "spa".into(),
+                code_verifier: String::new(),
+                refresh_token: rt,
+            },
+            1_001,
+            "https://auth.example/token",
+            &dpop_key,
+            "rt-ok",
+        );
         assert_eq!(rotated.token_type, "DPoP");
         assert!(rotated.refresh_token.is_some());
     }

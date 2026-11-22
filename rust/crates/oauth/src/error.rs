@@ -11,6 +11,8 @@ pub enum OAuthError {
     UnsupportedGrantType,
     /// Bearer access token rejected at UserInfo (RFC 6750).
     InvalidToken,
+    /// DPoP proof missing or wrong `nonce`; retry with `DPoP-Nonce` (RFC 9449).
+    UseDpopNonce,
     ServerError,
 }
 
@@ -23,6 +25,7 @@ impl OAuthError {
             OAuthError::InvalidGrant => "invalid_grant",
             OAuthError::UnsupportedGrantType => "unsupported_grant_type",
             OAuthError::InvalidToken => "invalid_token",
+            OAuthError::UseDpopNonce => "use_dpop_nonce",
             OAuthError::ServerError => "server_error",
         }
     }

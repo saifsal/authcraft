@@ -11,8 +11,9 @@ verifiers accept. The first slice must stay small enough to test as a library,
 while still exposing a thin HTTP surface for demos.
 
 RFC 9700 and common practice require PKCE for public clients. Real user
-authentication (passwords, WebAuthn) belongs to M5; this milestone only needs a
-stub subject so the code path is exercisable.
+authentication (passwords, WebAuthn) belongs to M5 ([ADR 0010](0010-authentication.md));
+this milestone originally used a stub subject so the code path was exercisable.
+The stub has been replaced by Argon2id passwords (M5 B1).
 
 ## Decision
 

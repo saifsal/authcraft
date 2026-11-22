@@ -1,4 +1,4 @@
-//! Axum HTTP surface for authcraft OAuth + OIDC (ADR 0005, ADR 0006).
+//! Axum HTTP surface for authcraft OAuth + OIDC + authn (ADR 0005–0010).
 
 #![forbid(unsafe_code)]
 
@@ -14,8 +14,8 @@ use axum::{Json, Router};
 use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, LoginSubject, OAuthError, PendingAuthorization,
-    ServerConfig, TokenRequest, TokenTypeHint,
+    AuthorizationServer, AuthorizeRequest, Client, OAuthError, PendingAuthorization, ServerConfig,
+    TokenRequest, TokenTypeHint,
 };
 use serde::Deserialize;
 
@@ -36,7 +36,7 @@ impl AppState {
 
     pub fn demo() -> Self {
         let key = generate_signing_key(Alg::EdDSA).expect("generate EdDSA key");
-        Self::new(
+        let state = Self::new(
             ServerConfig::new("http://127.0.0.1:8089", "api"),
             vec![Client {
                 client_id: "spa".into(),
@@ -46,7 +46,9 @@ impl AppState {
                 ],
             }],
             key,
-        )
+        );
+        state.server.seed_demo_users();
+        state
     }
 }
 
@@ -177,28 +179,34 @@ async fn par(State(state): State<AppState>, Form(form): Form<ParForm>) -> Respon
     }
 }
 
-async fn login_get() -> Html<&'static str> {
-    Html(
+fn login_page(error: Option<&str>) -> Html<String> {
+    let err = error
+        .map(|e| format!("<p style=\"color:red\">{e}</p>"))
+        .unwrap_or_default();
+    Html(format!(
         r#"<!doctype html>
 <html><head><title>authcraft login</title></head>
 <body>
-  <h1>Stub login</h1>
-  <p>Educational stub — no password (ADR 0005 / ADR 0006).</p>
+  <h1>Login</h1>
+  <p>Educational Argon2id passwords (ADR 0010). Demo user <code>alice</code> / <code>password</code>.</p>
+  {err}
   <form method="post" action="/login">
-    <label>Subject <input name="subject" value="alice" /></label>
-    <label>Name <input name="name" value="Alice" /></label>
-    <label>Email <input name="email" value="alice@example.com" /></label>
-    <button type="submit">Continue</button>
+    <label>Username <input name="username" value="alice" autocomplete="username" /></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" /></label>
+    <button type="submit">Sign in</button>
   </form>
-</body></html>"#,
-    )
+</body></html>"#
+    ))
+}
+
+async fn login_get() -> Html<String> {
+    login_page(None)
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
-    pub subject: String,
-    pub name: Option<String>,
-    pub email: Option<String>,
+    pub username: String,
+    pub password: String,
 }
 
 fn cookie_ticket(headers: &HeaderMap) -> Option<String> {
@@ -212,10 +220,6 @@ fn cookie_ticket(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-fn nonempty_opt(s: Option<String>) -> Option<String> {
-    s.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
-}
-
 async fn login_post(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -225,18 +229,28 @@ async fn login_post(
         return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
     };
     let pending = {
-        let mut map = state.pending.lock().expect("pending lock");
-        map.remove(&ticket)
+        let map = state.pending.lock().expect("pending lock");
+        map.get(&ticket).cloned()
     };
     let Some(pending) = pending else {
         return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
     };
 
-    let login = LoginSubject {
-        subject: form.subject.trim().to_owned(),
-        name: nonempty_opt(form.name),
-        email: nonempty_opt(form.email),
+    let login = match state
+        .server
+        .authenticate_password(form.username.trim(), &form.password)
+    {
+        Ok(login) => login,
+        Err(_) => {
+            return (StatusCode::UNAUTHORIZED, login_page(Some("Invalid username or password")))
+                .into_response();
+        }
     };
+
+    {
+        let mut map = state.pending.lock().expect("pending lock");
+        map.remove(&ticket);
+    }
 
     match state.server.finish_authorize(pending, &login, now_unix()) {
         Ok(success) => {

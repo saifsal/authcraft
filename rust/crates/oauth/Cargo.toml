@@ -8,5 +8,6 @@ publish = false
 [dependencies]
 jose = { path = "../jose" }
 ring = "0.17"
+argon2 = "0.5"
 
 [dev-dependencies]

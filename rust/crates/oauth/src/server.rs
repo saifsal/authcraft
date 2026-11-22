@@ -21,6 +21,7 @@ use crate::par::{ParRecord, ParStore, DEFAULT_PAR_TTL_SECS};
 use crate::pkce::{self, require_s256_method};
 use crate::refresh::{RefreshStore, DEFAULT_REFRESH_TOKEN_TTL_SECS};
 use crate::token::{self, TokenClaims, DEFAULT_ACCESS_TOKEN_TTL_SECS};
+use crate::users::{AuthnError, UserRecord, UserStore};
 
 /// Server configuration shared by the library and HTTP binder.
 #[derive(Debug, Clone)]
@@ -55,7 +56,7 @@ pub struct ParSuccess {
     pub expires_in: i64,
 }
 
-/// Validated authorize request awaiting stub login completion.
+/// Validated authorize request awaiting resource-owner authentication.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingAuthorization {
     pub client_id: String,
@@ -66,7 +67,7 @@ pub struct PendingAuthorization {
     pub nonce: Option<String>,
 }
 
-/// Stub login subject and optional profile claims (ADR 0006).
+/// Authenticated subject and optional profile claims (ADR 0006 / ADR 0010).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginSubject {
     pub subject: String,
@@ -190,6 +191,7 @@ pub struct AuthorizationServer {
     keys: Mutex<Keyring>,
     par: Mutex<ParStore>,
     dpop_jtis: Mutex<DpopJtiCache>,
+    users: Mutex<UserStore>,
 }
 
 impl AuthorizationServer {
@@ -204,7 +206,43 @@ impl AuthorizationServer {
             keys: Mutex::new(Keyring::from_signing_key(signing, grace)),
             par: Mutex::new(ParStore::new()),
             dpop_jtis: Mutex::new(DpopJtiCache::new()),
+            users: Mutex::new(UserStore::new()),
         }
+    }
+
+    /// Insert or replace a user account (ADR 0010).
+    pub fn upsert_user(&self, username: impl Into<String>, record: UserRecord) {
+        self.users
+            .lock()
+            .expect("users lock")
+            .insert(username, record);
+    }
+
+    /// Seed the published demo user `alice`.
+    pub fn seed_demo_users(&self) {
+        self.users.lock().expect("users lock").seed_demo_alice();
+    }
+
+    /// Verify username + password; returns [`LoginSubject`] on success.
+    pub fn authenticate_password(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<LoginSubject, AuthnError> {
+        self.users
+            .lock()
+            .expect("users lock")
+            .authenticate_password(username, password)
+    }
+
+    /// Whether the user has any second factor enrolled (TOTP / WebAuthn).
+    pub fn user_mfa_enrolled(&self, username: &str) -> bool {
+        self.users
+            .lock()
+            .expect("users lock")
+            .get(username.trim())
+            .map(UserRecord::mfa_enrolled)
+            .unwrap_or(false)
     }
 
     pub fn public_key(&self) -> PublicKey {

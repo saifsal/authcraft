@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://authcraft.local/testvectors/authn/schema.json",
+  "title": "authcraft M5 password authn vector",
+  "type": "object",
+  "required": ["id", "source", "description", "steps", "expect"],
+  "properties": {
+    "id": { "type": "string" },
+    "source": { "type": "string" },
+    "description": { "type": "string" },
+    "steps": {
+      "type": "object",
+      "required": ["username", "password", "seed_password"],
+      "properties": {
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "seed_password": { "type": "string" },
+        "subject": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "required": ["ok"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "subject": { "type": "string" },
+        "error": { "type": "string" }
+      }
+    }
+  }
+}

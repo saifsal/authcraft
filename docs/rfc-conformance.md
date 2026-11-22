@@ -91,10 +91,18 @@ Profile: [ADR 0009](adr/0009-hardening-par-dpop.md). Narrative: [oauth-m4.md](oa
 | RFC 9449 | Optional DPoP; `cnf.jkt`; UserInfo proof when bound | `testvectors/dpop/` + `oauth::dpop` |
 | RFC 9700 | BCP mapped to done/partial/open | [rfc-9700-checklist.md](rfc-9700-checklist.md) |
 
+## M5 authentication
+
+Profile: [ADR 0010](adr/0010-authentication.md). Narrative: [oauth-m5.md](oauth-m5.md).
+
+| Specification | In-scope behavior | Evidence |
+|---|---|---|
+| Argon2id passwords | `UserStore` + `authenticate_password`; demo `alice` | `testvectors/authn/` + `oauth::users` |
+
 ## Other RFCs referenced by the project
 
 Remaining gaps called out in the RFC 9700 checklist (mix-up `iss`, confidential
-clients, required PAR, real authn, etc.) are later milestones.
+clients, required PAR, TOTP/WebAuthn, etc.) are later milestones.
 
 ## Checked-in RFC vectors
 

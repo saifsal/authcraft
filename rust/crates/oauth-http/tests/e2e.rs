@@ -63,7 +63,7 @@ async fn authorize_login_token_verifies() {
                 .uri("/login")
                 .header(header::COOKIE, &cookie)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .body(Body::from("subject=alice"))
+                .body(Body::from("username=alice&password=password"))
                 .unwrap(),
         )
         .await
@@ -165,7 +165,7 @@ async fn openid_flow_id_token_and_userinfo() {
                 .header(header::COOKIE, &cookie)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "subject=alice&name=Alice&email=alice%40example.com",
+                    "username=alice&password=password",
                 ))
                 .unwrap(),
         )

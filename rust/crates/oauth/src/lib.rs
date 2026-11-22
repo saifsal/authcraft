@@ -1,6 +1,6 @@
-//! OAuth 2.0 authorization-code + PKCE and OpenID Connect (ADR 0005, ADR 0006).
+//! OAuth 2.0 authorization-code + PKCE, OIDC, and resource-owner authn (ADR 0005–0010).
 //!
-//! Educational use only. Stub login and in-memory stores are intentional.
+//! Educational use only. In-memory stores are intentional.
 
 #![forbid(unsafe_code)]
 
@@ -16,6 +16,7 @@ pub mod pkce;
 pub mod refresh;
 pub mod server;
 pub mod token;
+pub mod users;
 
 pub use client::{Client, ClientRegistry};
 pub use error::OAuthError;
@@ -24,4 +25,7 @@ pub use server::{
     AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, Introspection, LoginSubject,
     ParSuccess, PendingAuthorization, ServerConfig, TokenRequest, TokenSuccess, TokenTypeHint,
     UserInfo,
+};
+pub use users::{
+    hash_password, AuthnError, UserRecord, UserStore, DEMO_ALICE_PASSWORD,
 };

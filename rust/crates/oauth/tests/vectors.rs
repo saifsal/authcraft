@@ -13,7 +13,8 @@ use jose::verify::{self, Policy};
 use oauth::id_token;
 use oauth::pkce;
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, LoginSubject, ServerConfig, TokenRequest,
+    hash_password, AuthorizationServer, AuthorizeRequest, Client, LoginSubject, ServerConfig,
+    TokenRequest, UserRecord,
 };
 
 fn oauth_vectors_dir() -> PathBuf {
@@ -34,6 +35,10 @@ fn par_vectors_dir() -> PathBuf {
 
 fn dpop_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/dpop")
+}
+
+fn authn_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/authn")
 }
 
 fn make_dpop_proof(htm: &str, htu: &str, iat: i64, jti: &str, pkcs8: &[u8], public: &PublicKey) -> String {
@@ -713,5 +718,47 @@ fn dpop_shared_vectors() {
     assert!(!files.is_empty(), "no dpop vectors");
     for f in files {
         run_dpop_vector(&f);
+    }
+}
+
+fn run_authn_vector(path: &Path) {
+    let raw = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let root = json::parse(raw.as_bytes()).unwrap_or_else(|e| panic!("json {}: {e}", path.display()));
+    let case = string(&root, "id");
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+
+    let srv = make_server();
+    let username = string(steps, "username");
+    let seed_password = string(steps, "seed_password");
+    let hash = hash_password(seed_password).expect("hash");
+    srv.upsert_user(
+        username,
+        UserRecord {
+            subject: string(steps, "subject").into(),
+            name: optional_string(steps, "name").map(str::to_owned),
+            email: optional_string(steps, "email").map(str::to_owned),
+            password_hash: hash,
+            totp_secret: None,
+            webauthn_credential_ids: Vec::new(),
+        },
+    );
+
+    let result = srv.authenticate_password(username, string(steps, "password"));
+    if bool_field(expect, "ok") {
+        let login = result.unwrap_or_else(|e| panic!("{case}: {e}"));
+        assert_eq!(login.subject, string(expect, "subject"), "{case}");
+    } else {
+        let err = result.expect_err("expected authn failure");
+        assert_eq!(err.code(), string(expect, "error"), "{case}");
+    }
+}
+
+#[test]
+fn authn_shared_vectors() {
+    let files = load_json_vectors(&authn_vectors_dir());
+    assert!(!files.is_empty(), "no authn vectors");
+    for f in files {
+        run_authn_vector(&f);
     }
 }

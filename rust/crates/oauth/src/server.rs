@@ -23,6 +23,11 @@ use crate::refresh::{RefreshStore, DEFAULT_REFRESH_TOKEN_TTL_SECS};
 use crate::token::{self, TokenClaims, DEFAULT_ACCESS_TOKEN_TTL_SECS};
 use crate::totp;
 use crate::users::{AuthnError, UserRecord, UserStore};
+use crate::webauthn_mfa::WebauthnMfa;
+use webauthn_rs::prelude::{
+    CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential,
+    RequestChallengeResponse,
+};
 
 /// Server configuration shared by the library and HTTP binder.
 #[derive(Debug, Clone)]
@@ -34,18 +39,30 @@ pub struct ServerConfig {
     pub refresh_token_ttl_secs: i64,
     pub verify_grace_secs: i64,
     pub par_ttl_secs: i64,
+    /// WebAuthn RP ID (e.g. `127.0.0.1`).
+    pub rp_id: String,
+    /// WebAuthn RP origin (e.g. `http://127.0.0.1:8089`).
+    pub rp_origin: String,
 }
 
 impl ServerConfig {
     pub fn new(issuer: impl Into<String>, audience: impl Into<String>) -> Self {
+        let issuer = issuer.into();
+        let rp_origin = issuer.clone();
+        let rp_id = url::Url::parse(&issuer)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "localhost".into());
         Self {
-            issuer: issuer.into(),
+            issuer,
             audience: audience.into(),
             code_ttl_secs: DEFAULT_CODE_TTL_SECS,
             access_token_ttl_secs: DEFAULT_ACCESS_TOKEN_TTL_SECS,
             refresh_token_ttl_secs: DEFAULT_REFRESH_TOKEN_TTL_SECS,
             verify_grace_secs: DEFAULT_VERIFY_GRACE_SECS,
             par_ttl_secs: DEFAULT_PAR_TTL_SECS,
+            rp_id,
+            rp_origin,
         }
     }
 }
@@ -200,11 +217,14 @@ pub struct AuthorizationServer {
     par: Mutex<ParStore>,
     dpop_jtis: Mutex<DpopJtiCache>,
     users: Mutex<UserStore>,
+    webauthn: WebauthnMfa,
 }
 
 impl AuthorizationServer {
     pub fn new(config: ServerConfig, clients: Vec<Client>, signing: SigningKey) -> Self {
         let grace = config.verify_grace_secs;
+        let webauthn = WebauthnMfa::new(&config.rp_id, &config.rp_origin)
+            .expect("webauthn rp configuration");
         Self {
             config,
             clients: ClientRegistry::new(clients),
@@ -215,6 +235,7 @@ impl AuthorizationServer {
             par: Mutex::new(ParStore::new()),
             dpop_jtis: Mutex::new(DpopJtiCache::new()),
             users: Mutex::new(UserStore::new()),
+            webauthn,
         }
     }
 
@@ -303,6 +324,76 @@ impl AuthorizationServer {
         } else {
             Err(AuthnError::InvalidMfa)
         }
+    }
+
+    pub fn user_webauthn_enrolled(&self, username: &str) -> bool {
+        self.users
+            .lock()
+            .expect("users lock")
+            .get(username.trim())
+            .map(UserRecord::webauthn_enrolled)
+            .unwrap_or(false)
+    }
+
+    /// Begin WebAuthn security-key registration (after password check by caller).
+    pub fn webauthn_start_registration(
+        &self,
+        username: &str,
+    ) -> Result<CreationChallengeResponse, AuthnError> {
+        let users = self.users.lock().expect("users lock");
+        let user = users.get(username.trim()).ok_or(AuthnError::InvalidCredentials)?;
+        let display = user
+            .name
+            .clone()
+            .unwrap_or_else(|| user.subject.clone());
+        let handle = user.user_handle;
+        let existing = user.webauthn_credentials.clone();
+        drop(users);
+        self.webauthn
+            .start_registration(username.trim(), handle, &display, existing)
+    }
+
+    pub fn webauthn_finish_registration(
+        &self,
+        username: &str,
+        reg: &RegisterPublicKeyCredential,
+    ) -> Result<(), AuthnError> {
+        let sk = self.webauthn.finish_registration(username.trim(), reg)?;
+        let mut users = self.users.lock().expect("users lock");
+        let user = users
+            .get_mut(username.trim())
+            .ok_or(AuthnError::InvalidCredentials)?;
+        user.webauthn_credentials.push(sk);
+        Ok(())
+    }
+
+    pub fn webauthn_start_authentication(
+        &self,
+        session_key: &str,
+        username: &str,
+    ) -> Result<RequestChallengeResponse, AuthnError> {
+        let users = self.users.lock().expect("users lock");
+        let user = users.get(username.trim()).ok_or(AuthnError::InvalidMfa)?;
+        if user.webauthn_credentials.is_empty() {
+            return Err(AuthnError::InvalidMfa);
+        }
+        let creds = user.webauthn_credentials.clone();
+        drop(users);
+        self.webauthn.start_authentication(session_key, &creds)
+    }
+
+    pub fn webauthn_finish_authentication(
+        &self,
+        session_key: &str,
+        username: &str,
+        auth: &PublicKeyCredential,
+    ) -> Result<(), AuthnError> {
+        let mut users = self.users.lock().expect("users lock");
+        let user = users
+            .get_mut(username.trim())
+            .ok_or(AuthnError::InvalidMfa)?;
+        self.webauthn
+            .finish_authentication(session_key, auth, &mut user.webauthn_credentials)
     }
 
     pub fn public_key(&self) -> PublicKey {

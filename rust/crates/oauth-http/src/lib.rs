@@ -46,7 +46,8 @@ impl AppState {
     pub fn demo() -> Self {
         let key = generate_signing_key(Alg::EdDSA).expect("generate EdDSA key");
         let state = Self::new(
-            ServerConfig::new("http://127.0.0.1:8089", "api"),
+            // localhost (not 127.0.0.1) so WebAuthn RP checks accept the demo origin.
+            ServerConfig::new("http://localhost:8089", "api"),
             vec![Client {
                 client_id: "spa".into(),
                 redirect_uris: vec![
@@ -73,7 +74,11 @@ pub fn app(state: AppState) -> Router {
         .route("/par", post(par))
         .route("/login", get(login_get).post(login_post))
         .route("/login/mfa", get(mfa_get).post(mfa_post))
+        .route("/login/mfa/webauthn/start", post(mfa_webauthn_start))
+        .route("/login/mfa/webauthn/finish", post(mfa_webauthn_finish))
         .route("/enroll/totp", post(enroll_totp))
+        .route("/enroll/webauthn/start", post(enroll_webauthn_start))
+        .route("/enroll/webauthn/finish", post(enroll_webauthn_finish))
         .route("/token", post(token))
         .route("/userinfo", get(userinfo))
         .route("/revoke", post(revoke))
@@ -305,11 +310,11 @@ fn mfa_page(error: Option<&str>) -> Html<String> {
 <html><head><title>authcraft MFA</title></head>
 <body>
   <h1>Two-factor authentication</h1>
-  <p>Enter the TOTP code from your authenticator (ADR 0010).</p>
+  <p>Enter a TOTP code if enrolled, or complete WebAuthn via the JSON MFA endpoints (ADR 0010).</p>
   {err}
   <form method="post" action="/login/mfa">
     <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" /></label>
-    <button type="submit">Verify</button>
+    <button type="submit">Verify TOTP</button>
   </form>
 </body></html>"#
     ))
@@ -340,6 +345,13 @@ async fn mfa_post(
         return (StatusCode::BAD_REQUEST, "no MFA session").into_response();
     };
 
+    if !state.server.user_totp_enrolled(&mfa.username) {
+        return (
+            StatusCode::BAD_REQUEST,
+            mfa_page(Some("TOTP not enrolled; use WebAuthn MFA endpoints")),
+        )
+            .into_response();
+    }
     if state
         .server
         .verify_totp(&mfa.username, &form.code, now_unix())
@@ -398,6 +410,151 @@ async fn enroll_totp(State(state): State<AppState>, Form(form): Form<EnrollTotpF
             Json(serde_json::json!({ "error": err.code() })),
         )
             .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnrollWebauthnStartForm {
+    pub username: String,
+    pub password: String,
+}
+
+async fn enroll_webauthn_start(
+    State(state): State<AppState>,
+    Form(form): Form<EnrollWebauthnStartForm>,
+) -> Response {
+    if state
+        .server
+        .authenticate_password(form.username.trim(), &form.password)
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "invalid_credentials" })),
+        )
+            .into_response();
+    }
+    match state.server.webauthn_start_registration(form.username.trim()) {
+        Ok(ccr) => Json(ccr).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnrollWebauthnFinishBody {
+    pub username: String,
+    pub credential: serde_json::Value,
+}
+
+async fn enroll_webauthn_finish(
+    State(state): State<AppState>,
+    Json(body): Json<EnrollWebauthnFinishBody>,
+) -> Response {
+    let reg: webauthn_rs::prelude::RegisterPublicKeyCredential =
+        match serde_json::from_value(body.credential) {
+            Ok(v) => v,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "invalid_mfa" })),
+                )
+                    .into_response();
+            }
+        };
+    match state
+        .server
+        .webauthn_finish_registration(body.username.trim(), &reg)
+    {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn mfa_webauthn_start(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(ticket) = cookie_ticket(&headers) else {
+        return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
+    };
+    let username = {
+        let map = state.mfa_pending.lock().expect("mfa lock");
+        map.get(&ticket).map(|m| m.username.clone())
+    };
+    let Some(username) = username else {
+        return (StatusCode::BAD_REQUEST, "no MFA session").into_response();
+    };
+    match state
+        .server
+        .webauthn_start_authentication(&ticket, &username)
+    {
+        Ok(rcr) => Json(rcr).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.code() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn mfa_webauthn_finish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(credential): Json<serde_json::Value>,
+) -> Response {
+    let Some(ticket) = cookie_ticket(&headers) else {
+        return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
+    };
+    let mfa = {
+        let map = state.mfa_pending.lock().expect("mfa lock");
+        map.get(&ticket).cloned()
+    };
+    let Some(mfa) = mfa else {
+        return (StatusCode::BAD_REQUEST, "no MFA session").into_response();
+    };
+    let auth: webauthn_rs::prelude::PublicKeyCredential = match serde_json::from_value(credential)
+    {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "invalid_mfa" })),
+            )
+                .into_response();
+        }
+    };
+    if state
+        .server
+        .webauthn_finish_authentication(&ticket, &mfa.username, &auth)
+        .is_err()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "invalid_mfa" })),
+        )
+            .into_response();
+    }
+
+    state.mfa_pending.lock().expect("mfa lock").remove(&ticket);
+    let pending = {
+        let mut map = state.pending.lock().expect("pending lock");
+        map.remove(&ticket)
+    };
+    let Some(pending) = pending else {
+        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
+    };
+
+    match state
+        .server
+        .finish_authorize(pending, &mfa.login, now_unix())
+    {
+        Ok(success) => redirect_with_code(&success),
+        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
     }
 }
 

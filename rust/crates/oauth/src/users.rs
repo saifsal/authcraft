@@ -8,10 +8,18 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use argon2::Argon2;
 use ring::rand::{SecureRandom, SystemRandom};
 
+use uuid::Uuid;
+use webauthn_rs::prelude::SecurityKey;
+
 use crate::server::LoginSubject;
 
 /// Published demo password for seeded user `alice` (educational only).
 pub const DEMO_ALICE_PASSWORD: &str = "password";
+
+/// Stable UUID for demo user `alice` (WebAuthn user handle).
+pub const DEMO_ALICE_UUID: Uuid = Uuid::from_bytes([
+    0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0x41, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1,
+]);
 
 /// Authentication failure codes for password / MFA (ADR 0010).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,14 +51,15 @@ impl std::error::Error for AuthnError {}
 #[derive(Debug, Clone)]
 pub struct UserRecord {
     pub subject: String,
+    pub user_handle: Uuid,
     pub name: Option<String>,
     pub email: Option<String>,
     /// PHC-encoded Argon2id hash.
     pub password_hash: String,
-    /// TOTP secret (base32) when enrolled; unused until M5 B2.
+    /// TOTP secret (base32) when enrolled.
     pub totp_secret: Option<String>,
-    /// WebAuthn credential ids reserved for M5 B3.
-    pub webauthn_credential_ids: Vec<Vec<u8>>,
+    /// WebAuthn security-key credentials (second factor).
+    pub webauthn_credentials: Vec<SecurityKey>,
 }
 
 impl UserRecord {
@@ -63,7 +72,11 @@ impl UserRecord {
     }
 
     pub fn mfa_enrolled(&self) -> bool {
-        self.totp_secret.is_some() || !self.webauthn_credential_ids.is_empty()
+        self.totp_secret.is_some() || !self.webauthn_credentials.is_empty()
+    }
+
+    pub fn webauthn_enrolled(&self) -> bool {
+        !self.webauthn_credentials.is_empty()
     }
 }
 
@@ -99,11 +112,12 @@ impl UserStore {
             "alice",
             UserRecord {
                 subject: "alice".into(),
+                user_handle: DEMO_ALICE_UUID,
                 name: Some("Alice".into()),
                 email: Some("alice@example.com".into()),
                 password_hash: hash,
                 totp_secret: None,
-                webauthn_credential_ids: Vec::new(),
+                webauthn_credentials: Vec::new(),
             },
         );
     }

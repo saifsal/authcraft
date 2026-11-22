@@ -99,11 +99,12 @@ Profile: [ADR 0010](adr/0010-authentication.md). Narrative: [oauth-m5.md](oauth-
 |---|---|---|
 | Argon2id passwords | `UserStore` + `authenticate_password`; demo `alice` | `testvectors/authn/` + `oauth::users` |
 | RFC 6238 TOTP | Enroll + required MFA when enrolled; ±1 step | `testvectors/authn/` + `oauth::totp` |
+| WebAuthn (L2) | Security-key second factor; SoftPasskey tests | `oauth::webauthn_mfa` + oauth-http e2e |
 
 ## Other RFCs referenced by the project
 
 Remaining gaps called out in the RFC 9700 checklist (mix-up `iss`, confidential
-clients, required PAR, TOTP/WebAuthn, etc.) are later milestones.
+clients, required PAR, etc.) are later milestones.
 
 ## Checked-in RFC vectors
 

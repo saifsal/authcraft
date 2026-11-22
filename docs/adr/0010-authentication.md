@@ -39,15 +39,26 @@ passwords, then optional second factors.
 5. Shared vectors under `testvectors/authn/` cover good TOTP, wrong code,
    and out-of-window skew.
 
-### B3 — WebAuthn (pending)
+### B3 — WebAuthn
+
+1. Second-factor **security keys** via `webauthn-rs` (not passwordless /
+   discoverable passkeys).
+2. RP ID / origin come from `ServerConfig` (demo: `localhost` /
+   `http://localhost:8089`).
+3. HTTP: `POST /enroll/webauthn/start|finish` (password-gated start) and
+   `POST /login/mfa/webauthn/start|finish` during MFA.
+4. If both TOTP and WebAuthn are enrolled, **either** second factor satisfies
+   MFA.
+5. Soft-authenticator coverage via `webauthn-authenticator-rs` SoftPasskey
+   (library + HTTP e2e); no browser CI required.
 
 ## Consequences
 
 - Stub subject picker is removed.
 - Profile claims (`name`, `email`) come from the user record, not the login form.
-- TOTP and WebAuthn fields exist on the record but are unused until B2/B3.
+- Demo issuer uses `http://localhost:8089` so WebAuthn origin checks succeed.
 
 ## Alternatives considered
 
 - **bcrypt / scrypt.** Rejected; Argon2id is the current default for new systems.
-- **Passwordless-only.** Deferred; password remains the primary factor for this slice.
+- **Passwordless-only WebAuthn.** Deferred; password remains the primary factor.

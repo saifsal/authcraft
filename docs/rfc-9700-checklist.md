@@ -20,7 +20,7 @@ Educational mapping of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
 | Confidential clients / client auth | open | Public clients only |
 | PAR required for public clients | open | `require_pushed_authorization_requests=false` |
 | DPoP nonce from AS | open | Clock-skew `iat` only |
-| Real resource-owner authentication | partial | Argon2id passwords (M5 B1); TOTP/WebAuthn next |
+| Real resource-owner authentication | done | Argon2id + optional TOTP/WebAuthn 2FA (M5); stub login removed |
 | TLS / production deployment | open | Local demo binds only |
 | Sender-constrained refresh (DPoP) | open | Refresh tokens remain opaque bearer-style secrets |
 | JAR / request objects | open | PAR body only |

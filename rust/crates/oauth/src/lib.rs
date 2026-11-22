@@ -18,6 +18,7 @@ pub mod server;
 pub mod token;
 pub mod totp;
 pub mod users;
+pub mod webauthn_mfa;
 
 pub use client::{Client, ClientRegistry};
 pub use error::OAuthError;

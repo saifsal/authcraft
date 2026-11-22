@@ -738,11 +738,12 @@ fn run_authn_vector(path: &Path) {
         username,
         UserRecord {
             subject: subject.into(),
+            user_handle: uuid::Uuid::new_v4(),
             name: optional_string(steps, "name").map(str::to_owned),
             email: optional_string(steps, "email").map(str::to_owned),
             password_hash: hash,
             totp_secret: None,
-            webauthn_credential_ids: Vec::new(),
+            webauthn_credentials: Vec::new(),
         },
     );
 

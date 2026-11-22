@@ -20,8 +20,10 @@ ring = "0.17"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
+webauthn-rs = { version = "0.6.2", default-features = false, features = ["danger-allow-state-serialisation"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 jose = { path = "../jose" }
+webauthn-authenticator-rs = { version = "0.6.2", default-features = false, features = ["softpasskey"] }

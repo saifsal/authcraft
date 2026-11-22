@@ -224,7 +224,7 @@ From `zig/` with Zig 0.14.1:
 mise exec -- zig build test
 ```
 
-That runs the Zig library tests and the shared-vector suite (`src/vectors.zig`).
+That runs the Zig library tests (including the C ABI) and the shared-vector suite (`src/vectors.zig`). `zig build` installs `libauthcraft_jose.so` and `include/authcraft_jose.h` (ADR 0004).
 
 From `go/` with Go 1.27.4:
 
@@ -254,6 +254,7 @@ Useful design notes while changing verification:
 - [`docs/adr/0001-eddsa-default.md`](docs/adr/0001-eddsa-default.md) — why Ed25519 is the default and why `HS256` stays out of the default allowlist.
 - [`docs/adr/0002-vectors-are-the-contract.md`](docs/adr/0002-vectors-are-the-contract.md) — vectors override an implementation, except when a vector disagrees with the specification.
 - [`docs/adr/0003-verifier-check-order.md`](docs/adr/0003-verifier-check-order.md) — check order, error codes, and the minimum negative-vector list.
+- [`docs/adr/0004-zig-c-abi.md`](docs/adr/0004-zig-c-abi.md) — Zig `authcraft_jose_verify` C ABI for embedding.
 
 Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.md).
 
@@ -261,7 +262,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M0** | JOSE: JWS signing and verification, JWK/JWKS, thumbprints, shared test vectors | Complete for the verifier contract. Rust, Zig, and Go agree on `testvectors/`; Go differentials against `jose-cli`; CI regenerates vectors and runs all three suites. Zig C ABI / edge sidecar remain later work. |
+| **M0** | JOSE: JWS signing and verification, JWK/JWKS, thumbprints, shared test vectors | Complete for the verifier contract. Rust, Zig, and Go agree on `testvectors/`; Go differentials against `jose-cli`; CI regenerates vectors and runs all three suites; Zig exports `authcraft_jose_verify` (ADR 0004). Edge-auth sidecar remains later work. |
 | M1 | OAuth 2.0 authorization code flow with PKCE | Planned |
 | M2 | OpenID Connect: ID tokens, discovery, userinfo | Planned |
 | M3 | Token lifecycle: refresh rotation, introspection, revocation, key rotation | Planned |
@@ -278,7 +279,7 @@ The intended shape, once M0 is filled in, is three implementations of one verifi
 | Language | Intended component | In this repository |
 |---|---|---|
 | Rust | JOSE signer and, later, the authorization server core | `rust/crates/jose` only. No authorization server. |
-| Zig | JOSE/JWT verifier, a C ABI, and a small edge-auth sidecar | `zig/`: compact JWS/JWT verifier; C ABI and sidecar not started |
+| Zig | JOSE/JWT verifier, a C ABI, and a small edge-auth sidecar | `zig/`: compact JWS/JWT verifier + C ABI (`authcraft_jose`); sidecar not started |
 | Go | Control plane and the cross-implementation test harness | `go/jose` verifier + `go/harness` (vectors and differential vs `jose-cli`); control plane not started |
 
 ```mermaid

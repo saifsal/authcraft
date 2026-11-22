@@ -10,12 +10,24 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const lib = b.addLibrary(.{
+    const static_lib = b.addLibrary(.{
         .linkage = .static,
         .name = "jose",
         .root_module = lib_mod,
     });
-    b.installArtifact(lib);
+    b.installArtifact(static_lib);
+
+    // Shared library with the C ABI (ADR 0004).
+    const shared_lib = b.addLibrary(.{
+        .linkage = .dynamic,
+        .name = "authcraft_jose",
+        .root_module = lib_mod,
+    });
+    b.installArtifact(shared_lib);
+
+    b.getInstallStep().dependOn(
+        &b.addInstallFile(b.path("include/authcraft_jose.h"), "include/authcraft_jose.h").step,
+    );
 
     const unit_tests = b.addTest(.{
         .root_module = lib_mod,

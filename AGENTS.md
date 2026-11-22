@@ -6,7 +6,7 @@ authcraft is an educational OAuth 2.0 / OpenID Connect identity provider. Its pu
 
 Milestone M0 is in progress. The checked-in Rust library crate `jose` at `rust/crates/jose` signs and verifies compact JWS/JWT payloads, parses JWK and JWKS documents, computes RFC 7638 thumbprints, and enforces the verifier rules in `docs/adr/0003-verifier-check-order.md`. Generated vectors covering the ADR 0003 minimum negative set and positive time-boundary cases live under `testvectors/generated/`; compact RFC examples under `testvectors/rfc/`. The Zig package at `zig/` and the Go package at `go/jose` implement the same compact JWS/JWT verifier and run the shared vectors. The Go harness at `go/harness` also differentially compares Go verdicts to `jose-cli` when that binary is available. Later milestones (OAuth, OIDC, token lifecycle, authentication, control plane, federation) are planned and have no code yet.
 
-M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI). [`docs/rfc-conformance.md`](docs/rfc-conformance.md) remains the scope map and the rule for marking a behavior conformant. Accepted decisions are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md); M1 (OAuth authorization code + PKCE) is next for product work, with Zig C ABI / edge sidecar still open on the JOSE side.
+M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI). [`docs/rfc-conformance.md`](docs/rfc-conformance.md) remains the scope map and the rule for marking a behavior conformant. Accepted decisions are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md); M1 (OAuth authorization code + PKCE) is next, with the Zig edge-auth sidecar still open.
 
 ## Repository layout
 
@@ -19,8 +19,9 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI). [`docs/rfc-con
 │   ├── adr/
 │   │   ├── 0001-eddsa-default.md          # EdDSA default; HS256 verify-only; no `none`
 │   │   ├── 0002-vectors-are-the-contract.md
-│   │   └── 0003-verifier-check-order.md   # exact check order and error codes
-│   └── rfc-conformance.md                 # current M0 plan and remaining work
+│   │   ├── 0003-verifier-check-order.md   # exact check order and error codes
+│   │   └── 0004-zig-c-abi.md              # Zig verify C ABI for embedding
+│   └── rfc-conformance.md                 # M0 scope map
 ├── rust/
 │   ├── Cargo.toml                         # workspace; members jose and jose-cli
 │   ├── Cargo.lock
@@ -52,6 +53,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI). [`docs/rfc-con
 │   ├── mise.toml                          # zig = "0.14.1"
 │   ├── build.zig
 │   ├── build.zig.zon                      # package jose 0.1.0
+│   ├── include/
+│   │   └── authcraft_jose.h               # C ABI header (ADR 0004)
 │   └── src/
 │       ├── root.zig                       # module root
 │       ├── alg.zig                        # EdDSA, ES256, HS256
@@ -59,8 +62,10 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI). [`docs/rfc-con
 │       ├── json.zig                       # strict JSON (duplicate keys rejected)
 │       ├── jwk.zig                        # Ed25519 and P-256 public keys; thumbprints
 │       ├── jwks.zig                       # JWKS parse and kid selection
+│       ├── policy.zig                     # jose-cli-compatible policy JSON
 │       ├── signature.zig                  # EdDSA, ES256, HS256 verification
 │       ├── verify.zig                     # compact JWS/JWT verification and claims
+│       ├── c_api.zig                      # authcraft_jose_verify export
 │       └── vectors.zig                    # runs testvectors/ against the Zig verifier
 ├── go/
 │   ├── mise.toml                          # go = "1.27.4"
@@ -118,7 +123,7 @@ From `zig/`:
 mise exec -- zig build test
 ```
 
-That command succeeded on Zig 0.14.1 and runs the library unit tests plus the shared-vector suite in `src/vectors.zig` (cwd is the `zig/` package directory, which resolves `../testvectors`).
+That command succeeded on Zig 0.14.1 and runs the library unit tests (including the C ABI), plus the shared-vector suite in `src/vectors.zig` (cwd is the `zig/` package directory, which resolves `../testvectors`). `zig build` installs `libjose.a`, `libauthcraft_jose.so`, and `include/authcraft_jose.h` under `zig-out/`.
 
 From `go/`:
 

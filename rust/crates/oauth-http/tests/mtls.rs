@@ -205,6 +205,20 @@ async fn self_signed_mtls_client_gets_certificate_bound_token() {
     assert_eq!(userinfo(&other).await.unwrap().status(), StatusCode::UNAUTHORIZED);
     assert_eq!(userinfo(&plain).await.unwrap().status(), StatusCode::UNAUTHORIZED);
 
+    // Introspection (as the self-signed client, over mTLS) reports cnf.
+    let info: Value = mtls
+        .post(url("/introspect"))
+        .form(&[("token", access_token.as_str()), ("client_id", client_id.as_str())])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(info["active"], true);
+    assert_eq!(info["token_type"], "Bearer");
+    assert_eq!(info["cnf"]["x5t#S256"], expected.as_str());
+
     // Refresh: the family is bound to the certificate too.
     let refresh_token = tok["refresh_token"].as_str().unwrap().to_owned();
     let refresh_form = [

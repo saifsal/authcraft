@@ -1488,6 +1488,17 @@ async fn introspect(
                 if let Some(v) = info.token_type {
                     body["token_type"] = serde_json::Value::String(v.into());
                 }
+                // RFC 9449 §6.2 / RFC 8705 §3.2: report the token binding.
+                let mut cnf = serde_json::Map::new();
+                if let Some(v) = info.cnf_jkt {
+                    cnf.insert("jkt".into(), serde_json::Value::String(v));
+                }
+                if let Some(v) = info.cnf_x5t_s256 {
+                    cnf.insert("x5t#S256".into(), serde_json::Value::String(v));
+                }
+                if !cnf.is_empty() {
+                    body["cnf"] = serde_json::Value::Object(cnf);
+                }
             }
             Json(body).into_response()
         }

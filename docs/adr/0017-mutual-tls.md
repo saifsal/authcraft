@@ -1,6 +1,6 @@
 # ADR 0017: TLS listener and OAuth mutual TLS (RFC 8705)
 
-- **Status:** Accepted
+- **Status:** Accepted (amended as slices land)
 - **Date:** 2026-11-25
 
 ## Context
@@ -57,11 +57,21 @@ DPoP. mTLS is the remaining RFC 9700 mechanism, and it needs a TLS listener.
    `oauth-http/tests/mtls.rs` runs the flow over real TLS with `rcgen`
    certificates.
 
+## Amendments
+
+### B2 — Binding in introspection responses
+
+1. Active introspection responses include `cnf` when the token is bound:
+   `{"jkt": ...}` for DPoP (RFC 9449 §6.2) and `{"x5t#S256": ...}` for mTLS
+   (RFC 8705 §3.2). Refresh tokens report their family's binding.
+2. A DPoP-bound access token is reported with `token_type: "DPoP"`
+   (previously `Bearer`); certificate-bound tokens stay `Bearer`.
+3. `Introspection` gains `cnf_jkt` and `cnf_x5t_s256`.
+
 ## Not in this slice
 
 - `tls_client_auth` (PKI method: CA chain plus subject DN or SAN matching).
 - `mtls_endpoint_aliases`; the same endpoints serve TLS and mTLS.
-- Returning `cnf` from introspection.
 - TLS for `authcraft-edge` (Zig) and production hardening (certificate
   reload, HSTS, non-loopback binds).
 

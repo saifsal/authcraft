@@ -237,6 +237,10 @@ pub struct Introspection {
     pub exp: Option<i64>,
     pub iat: Option<i64>,
     pub token_type: Option<&'static str>,
+    /// `cnf.jkt` of a DPoP-bound token (RFC 9449 §6.2).
+    pub cnf_jkt: Option<String>,
+    /// `cnf.x5t#S256` of a certificate-bound token (RFC 8705 §3.2).
+    pub cnf_x5t_s256: Option<String>,
 }
 
 impl Introspection {
@@ -249,6 +253,8 @@ impl Introspection {
             exp: None,
             iat: None,
             token_type: None,
+            cnf_jkt: None,
+            cnf_x5t_s256: None,
         }
     }
 }
@@ -1544,6 +1550,8 @@ impl AuthorizationServer {
                         exp: Some(rec.expires_at),
                         iat: None,
                         token_type: Some("refresh_token"),
+                        cnf_jkt: rec.dpop_jkt.clone(),
+                        cnf_x5t_s256: rec.mtls_x5t.clone(),
                     });
                 }
             }
@@ -1555,6 +1563,14 @@ impl AuthorizationServer {
         if try_access {
             match self.verify_access_claims(token, now) {
                 Ok(claims) => {
+                    let cnf = |name: &str| {
+                        claims
+                            .get("cnf")
+                            .and_then(|c| c.get(name))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned)
+                    };
+                    let cnf_jkt = cnf("jkt");
                     return Ok(Introspection {
                         active: true,
                         client_id: claims
@@ -1568,7 +1584,10 @@ impl AuthorizationServer {
                             .map(str::to_owned),
                         exp: claims.get("exp").and_then(|v| v.as_i64()),
                         iat: claims.get("iat").and_then(|v| v.as_i64()),
-                        token_type: Some("Bearer"),
+                        // RFC 9449 §6.2: DPoP-bound access tokens are type DPoP.
+                        token_type: Some(if cnf_jkt.is_some() { "DPoP" } else { "Bearer" }),
+                        cnf_jkt,
+                        cnf_x5t_s256: cnf("x5t#S256"),
                     });
                 }
                 Err(_) => return Ok(Introspection::inactive()),
@@ -2567,5 +2586,65 @@ mod tests {
             srv.create_client(admin, Client::private_key_jwt("c", Vec::new(), jwks)),
             Err(AdminError::InvalidRequest)
         );
+    }
+
+    #[test]
+    fn introspection_reports_dpop_binding() {
+        let srv = server();
+        let verifier = "d".repeat(43);
+        let mut p = pending(&srv);
+        p.code_challenge = pkce::challenge_s256(&verifier).unwrap();
+        let code = srv
+            .finish_authorize(p, &LoginSubject::new("alice"), 1_000)
+            .unwrap()
+            .code;
+        let htu = "https://auth.example/token";
+        let key = generate_signing_key(Alg::EdDSA).unwrap();
+        let x = match &key.public {
+            PublicKey::Ed25519 { x } => b64url::encode(x),
+            _ => unreachable!(),
+        };
+        let nonce = srv.dpop_nonce().unwrap();
+        let header = format!(
+            r#"{{"typ":"dpop+jwt","alg":"EdDSA","jwk":{{"kty":"OKP","crv":"Ed25519","x":"{x}"}}}}"#
+        );
+        let payload = format!(
+            r#"{{"htm":"POST","htu":"{htu}","iat":1001,"jti":"i1","nonce":"{nonce}"}}"#
+        );
+        let input = format!(
+            "{}.{}",
+            b64url::encode(header.as_bytes()),
+            b64url::encode(payload.as_bytes())
+        );
+        let sig = jose::signing::sign(Alg::EdDSA, &key.pkcs8, input.as_bytes()).unwrap();
+        let proof = format!("{input}.{}", b64url::encode(&sig));
+        let tok = srv
+            .exchange_token(
+                &TokenRequest {
+                    grant_type: "authorization_code".into(),
+                    code,
+                    redirect_uri: "https://app.example/cb".into(),
+                    client_id: "spa".into(),
+                    code_verifier: verifier,
+                    refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
+                },
+                1_001,
+                Some(&proof),
+                htu,
+            )
+            .unwrap();
+        let jkt = key.public.thumbprint();
+        let at = srv
+            .introspect_token(&tok.access_token, TokenTypeHint::AccessToken, 1_001)
+            .unwrap();
+        assert_eq!(at.token_type, Some("DPoP"));
+        assert_eq!(at.cnf_jkt.as_deref(), Some(jkt.as_str()));
+        assert_eq!(at.cnf_x5t_s256, None);
+        let rt = srv
+            .introspect_token(&tok.refresh_token.unwrap(), TokenTypeHint::RefreshToken, 1_001)
+            .unwrap();
+        assert_eq!(rt.cnf_jkt.as_deref(), Some(jkt.as_str()));
     }
 }

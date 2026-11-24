@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://authcraft.local/testvectors/introspect/schema.json",
+  "title": "authcraft RFC 7662 introspection caller vector (ADR 0016)",
+  "type": "object",
+  "required": [
+    "id",
+    "source",
+    "description",
+    "steps",
+    "expect"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "steps": {
+      "type": "object",
+      "required": [
+        "token_client",
+        "caller",
+        "code_verifier",
+        "subject",
+        "now_authorize",
+        "now"
+      ],
+      "properties": {
+        "token_client": {
+          "enum": [
+            "spa",
+            "svc"
+          ],
+          "description": "Client the introspected access token is issued to (code flow, scope read)."
+        },
+        "token_client_assertion": {
+          "type": "string",
+          "description": "Assertion for the svc code exchange (jwt-bearer)."
+        },
+        "caller": {
+          "type": "string"
+        },
+        "caller_assertion_type": {
+          "type": "string"
+        },
+        "caller_assertion": {
+          "type": "string"
+        },
+        "redirect_uri_spa": {
+          "type": "string"
+        },
+        "redirect_uri_svc": {
+          "type": "string"
+        },
+        "code_verifier": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "now_authorize": {
+          "type": "integer"
+        },
+        "now": {
+          "type": "integer"
+        }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "required": [
+        "ok"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "error": {
+          "enum": [
+            "invalid_client",
+            "unauthorized_client"
+          ]
+        }
+      }
+    }
+  },
+  "x-authcraft-server": "Clients of testvectors/client_auth/schema.json (spa, svc) plus rs: private_key_jwt with the svc JWKS, no redirect_uris, resource_server = true."
+}

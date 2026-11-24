@@ -422,8 +422,11 @@ impl AuthorizationServer {
 
     fn validate_client_metadata(client: &Client) -> bool {
         match &client.token_endpoint_auth {
-            // A public client has no keys to sign request objects with.
-            TokenEndpointAuth::None => !client.require_signed_request_object,
+            // A public client has no keys to sign request objects with and
+            // cannot authenticate to the introspection endpoint.
+            TokenEndpointAuth::None => {
+                !client.require_signed_request_object && !client.resource_server
+            }
             TokenEndpointAuth::PrivateKeyJwt { jwks } => client_auth::parse_client_jwks(jwks).is_ok(),
         }
     }
@@ -435,6 +438,7 @@ impl AuthorizationServer {
     }
 
     /// Create a client (admin). A `private_key_jwt` client needs a non-empty JWKS.
+    /// A resource server (ADR 0016) may have no redirect URIs.
     pub fn create_client(
         &self,
         admin_token: Option<&str>,
@@ -442,7 +446,7 @@ impl AuthorizationServer {
     ) -> Result<Client, AdminError> {
         self.require_admin(admin_token)?;
         if client.client_id.trim().is_empty()
-            || client.redirect_uris.is_empty()
+            || (client.redirect_uris.is_empty() && !client.resource_server)
             || !Self::validate_client_metadata(&client)
         {
             return Err(AdminError::InvalidRequest);
@@ -765,7 +769,7 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"request_parameter_supported":true,"request_uri_parameter_supported":false,"request_object_signing_alg_values_supported":["EdDSA","ES256"],"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"scopes_supported":["openid","profile","email"]}}"#,
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"request_parameter_supported":true,"request_uri_parameter_supported":false,"request_object_signing_alg_values_supported":["EdDSA","ES256"],"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"revocation_endpoint_auth_methods_supported":["none","private_key_jwt"],"introspection_endpoint_auth_methods_supported":["private_key_jwt"],"scopes_supported":["openid","profile","email"]}}"#,
             require_par = if self.config.require_par {
                 "true"
             } else {
@@ -801,6 +805,8 @@ impl AuthorizationServer {
             client_name: req.client_name.clone(),
             token_endpoint_auth,
             require_signed_request_object: req.require_signed_request_object,
+            // RFC 7591 registration cannot grant the resource-server role.
+            resource_server: false,
         };
         if !Self::validate_client_metadata(&client) {
             return Err(OAuthError::InvalidRequest);
@@ -1377,8 +1383,41 @@ impl AuthorizationServer {
         Ok(())
     }
 
-    /// RFC 7662 introspection (no client auth in this demo).
+    /// RFC 7662 introspection (ADR 0016).
+    ///
+    /// The caller must authenticate as a `private_key_jwt` client. A client
+    /// flagged `resource_server` sees any token; any other client sees only
+    /// tokens issued to itself, and every other token reads as inactive.
     pub fn introspect(
+        &self,
+        token: &str,
+        hint: TokenTypeHint,
+        caller_client_id: &str,
+        client_auth: &ClientAssertion,
+        now: i64,
+    ) -> Result<Introspection, OAuthError> {
+        let caller = self.authenticate_client(
+            caller_client_id,
+            client_auth.client_assertion_type.as_deref(),
+            client_auth.client_assertion.as_deref(),
+            now,
+        )?;
+        if caller.token_endpoint_auth == TokenEndpointAuth::None {
+            // Public clients cannot authenticate (RFC 7662 §2.1).
+            return Err(OAuthError::InvalidClient);
+        }
+        let info = self.introspect_token(token, hint, now)?;
+        if info.active
+            && !caller.resource_server
+            && info.client_id.as_deref() != Some(caller.client_id.as_str())
+        {
+            return Ok(Introspection::inactive());
+        }
+        Ok(info)
+    }
+
+    /// Token state lookup behind [`Self::introspect`], without caller checks.
+    fn introspect_token(
         &self,
         token: &str,
         hint: TokenTypeHint,
@@ -1895,7 +1934,7 @@ mod tests {
                 1_001, None, "https://auth.example/token")
             .unwrap();
         assert!(srv
-            .introspect(&tok.access_token, TokenTypeHint::AccessToken, 1_001)
+            .introspect_token(&tok.access_token, TokenTypeHint::AccessToken, 1_001)
             .unwrap()
             .active);
         srv.revoke(
@@ -1906,7 +1945,7 @@ mod tests {
         )
         .unwrap();
         assert!(!srv
-            .introspect(&tok.access_token, TokenTypeHint::AccessToken, 1_001)
+            .introspect_token(&tok.access_token, TokenTypeHint::AccessToken, 1_001)
             .unwrap()
             .active);
         assert!(matches!(
@@ -2239,7 +2278,7 @@ mod tests {
         srv.revoke(&rt, TokenTypeHint::RefreshToken, "spa", &ClientAssertion::default(), 1_001)
             .unwrap();
         assert!(!srv
-            .introspect(&rt, TokenTypeHint::RefreshToken, 1_001)
+            .introspect_token(&rt, TokenTypeHint::RefreshToken, 1_001)
             .unwrap()
             .active);
         assert!(matches!(
@@ -2351,14 +2390,14 @@ mod tests {
             srv.revoke(&rt, TokenTypeHint::RefreshToken, "svc", &ClientAssertion::default(), 1_003),
             Err(OAuthError::InvalidClient)
         );
-        assert!(srv.introspect(&rt, TokenTypeHint::RefreshToken, 1_003).unwrap().active);
+        assert!(srv.introspect_token(&rt, TokenTypeHint::RefreshToken, 1_003).unwrap().active);
         let auth = ClientAssertion {
             client_assertion_type: Some(CLIENT_ASSERTION_TYPE_JWT_BEARER.into()),
             client_assertion: Some(client_assertion(&key, "https://auth.example", "j3", 1_060)),
         };
         srv.revoke(&rt, TokenTypeHint::RefreshToken, "svc", &auth, 1_003)
             .unwrap();
-        assert!(!srv.introspect(&rt, TokenTypeHint::RefreshToken, 1_003).unwrap().active);
+        assert!(!srv.introspect_token(&rt, TokenTypeHint::RefreshToken, 1_003).unwrap().active);
     }
 
     #[test]
@@ -2366,6 +2405,7 @@ mod tests {
         let srv = server();
         let doc = srv.openid_configuration();
         assert!(doc.contains(r#""token_endpoint_auth_methods_supported":["none","private_key_jwt"]"#));
+        assert!(doc.contains(r#""introspection_endpoint_auth_methods_supported":["private_key_jwt"]"#));
         let (_, key) = confidential_server();
         let kid = key.public.thumbprint();
         let jwks = format!(r#"{{"keys":[{{"kid":"{kid}",{}]}}"#, &key.public.canonical_json()[1..]);
@@ -2388,6 +2428,36 @@ mod tests {
                 require_signed_request_object: false,
             }),
             Err(OAuthError::InvalidRequest)
+        );
+    }
+
+    #[test]
+    fn admin_resource_server_rules() {
+        let mut cfg = ServerConfig::new("https://auth.example", "api");
+        cfg.admin_token = DEMO_ADMIN_TOKEN.into();
+        let srv = AuthorizationServer::new(cfg, Vec::new(), generate_signing_key(Alg::EdDSA).unwrap());
+        let (_, key) = confidential_server();
+        let jwks = format!(
+            r#"{{"keys":[{{"kid":"{}",{}]}}"#,
+            key.public.thumbprint(),
+            &key.public.canonical_json()[1..]
+        );
+        let admin = Some(DEMO_ADMIN_TOKEN);
+        // A resource server needs keys, but no redirect URIs.
+        assert_eq!(
+            srv.create_client(admin, Client { resource_server: true, ..Client::new("rs0", Vec::new()) }),
+            Err(AdminError::InvalidRequest)
+        );
+        assert!(srv
+            .create_client(
+                admin,
+                Client { resource_server: true, ..Client::private_key_jwt("rs", Vec::new(), jwks.clone()) },
+            )
+            .is_ok());
+        // Ordinary clients still need a redirect URI.
+        assert_eq!(
+            srv.create_client(admin, Client::private_key_jwt("c", Vec::new(), jwks)),
+            Err(AdminError::InvalidRequest)
         );
     }
 }

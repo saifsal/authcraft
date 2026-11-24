@@ -1,0 +1,19 @@
+{
+  "id": "neg-unknown-caller",
+  "source": "generated",
+  "description": "An unregistered caller gets unauthorized_client.",
+  "steps": {
+    "redirect_uri_spa": "https://app.example/cb",
+    "redirect_uri_svc": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now": 1001,
+    "token_client": "spa",
+    "caller": "nobody"
+  },
+  "expect": {
+    "ok": false,
+    "error": "unauthorized_client"
+  }
+}

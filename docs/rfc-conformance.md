@@ -78,7 +78,7 @@ Profile: [ADR 0008](adr/0008-token-lifecycle.md). Narrative: [oauth-m3.md](oauth
 |---|---|---|
 | RFC 6749 §6 | `refresh_token` grant; rotation; reuse → `invalid_grant` | `testvectors/token/` + `oauth` tests |
 | RFC 7009 | `POST /revoke`; refresh family / access `jti` denylist | `AuthorizationServer::revoke` + vectors |
-| RFC 7662 | `POST /introspect` (`active` + claims); no client auth (demo) | `AuthorizationServer::introspect` |
+| RFC 7662 | `POST /introspect` (`active` + claims); `private_key_jwt` callers, own tokens only unless `resource_server` (ADR 0016) | `testvectors/introspect/` + `AuthorizationServer::introspect` |
 | JOSE / JWKS | Multi-key JWKS after `rotate_signing_key`; grace prune | `oauth::keyring` + server tests |
 
 ## M4 hardening
@@ -135,8 +135,7 @@ Profile: [ADR 0013](adr/0013-assurance.md). Narrative: [oauth-m8.md](oauth-m8.md
 
 ## Other RFCs referenced by the project
 
-Remaining gaps called out in the RFC 9700 and OpenID checklists (client auth at
-`/introspect`, `request_uri` fetch / JWE request objects, full OIDF suite in CI, etc.) stay
+Remaining gaps called out in the RFC 9700 and OpenID checklists (`request_uri` fetch / JWE request objects, full OIDF suite in CI, etc.) stay
 operator/follow-on work.
 
 ## Checked-in RFC vectors

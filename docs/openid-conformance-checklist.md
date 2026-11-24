@@ -18,11 +18,11 @@ this repository. Status values match [rfc-9700-checklist.md](rfc-9700-checklist.
 | PAR (optional) | partial | ADR 0009; not required |
 | DPoP (optional) | partial | ADR 0009 |
 | Dynamic client registration | partial | `none` and `private_key_jwt` with inline `jwks` (ADR 0011 / 0014) |
-| Back-channel client auth (`private_key_jwt`) | done | `/token`, `/par`, `/revoke` (ADR 0014); `testvectors/client_auth/` |
+| Back-channel client auth (`private_key_jwt`) | done | `/token`, `/par`, `/revoke` (ADR 0014), `/introspect` (ADR 0016); `testvectors/client_auth/`, `testvectors/introspect/` |
 | Request object / JAR | partial | `request` by value, `private_key_jwt` clients only, optional per-client `require_signed_request_object` (ADR 0015); no `request_uri` fetch, no JWE |
 | Hybrid / implicit profiles | open | Not offered |
 | Full OIDF conformance suite in CI | open | Operator-run; this checklist tracks gaps |
 | Attack harness negatives | done | `oauth/tests/attack_harness.rs` (ADR 0013) |
 | Parser fuzz smoke in CI | done | `rust/fuzz` + `fuzz-smoke` job |
 
-Profile ADRs: 0005–0015. Runbook: [oauth-m8.md](oauth-m8.md).
+Profile ADRs: 0005–0016. Runbook: [oauth-m8.md](oauth-m8.md).

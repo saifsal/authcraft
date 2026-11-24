@@ -17,7 +17,7 @@ Educational mapping of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
 | Sender-constrained access tokens (DPoP) | partial | Optional DPoP (ADR 0009); Bearer still allowed |
 | Pushed Authorization Requests | partial | Optional PAR; `require_par` available (ADR 0009) |
 | Mix-up mitigation (`iss` on AS responses) | done | RFC 9207 `iss` on authorize success redirects |
-| Confidential clients / client auth | partial | `private_key_jwt` at `/token`, `/par`, `/revoke` (ADR 0014); `/introspect` unauthenticated |
+| Confidential clients / client auth | partial | `private_key_jwt` at `/token`, `/par`, `/revoke` (ADR 0014) and `/introspect` (ADR 0016); no mTLS |
 | PAR required for public clients | partial | `ServerConfig.require_par` (demo default false) |
 | DPoP nonce from AS | done | `use_dpop_nonce` + `DPoP-Nonce` header (ADR 0009 B5) |
 | Real resource-owner authentication | done | Argon2id + optional TOTP/WebAuthn 2FA (M5); stub login removed |
@@ -26,4 +26,4 @@ Educational mapping of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
 | JAR / request objects | partial | Signed `request` by value at `/authorize` and `/par`; per-client `require_signed_request_object` (ADR 0015) |
 
 Profile ADRs: [0005](adr/0005-oauth-code-pkce.md), [0008](adr/0008-token-lifecycle.md),
-[0009](adr/0009-hardening-par-dpop.md), [0014](adr/0014-private-key-jwt.md), [0015](adr/0015-jar-request-objects.md). Runbook: [oauth-m4.md](oauth-m4.md).
+[0009](adr/0009-hardening-par-dpop.md), [0014](adr/0014-private-key-jwt.md), [0015](adr/0015-jar-request-objects.md), [0016](adr/0016-protected-introspection.md). Runbook: [oauth-m4.md](oauth-m4.md).

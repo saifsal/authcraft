@@ -1,0 +1,21 @@
+{
+  "id": "neg-client-other-token-inactive",
+  "source": "generated",
+  "description": "A private_key_jwt client that is not a resource server sees another client's token as inactive.",
+  "steps": {
+    "redirect_uri_spa": "https://app.example/cb",
+    "redirect_uri_svc": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now": 1001,
+    "token_client": "spa",
+    "caller": "svc",
+    "caller_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "caller_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImluLXN2YyIsImV4cCI6MTA2MX0.LmiiJFk17wbuBWj80Ca0EBQhu0h0yLsyqrS_ViQke_zArJl7gTUdvV9r87aROLouW13Zun4e5yh7CKFPFKWqBw"
+  },
+  "expect": {
+    "ok": true,
+    "active": false
+  }
+}

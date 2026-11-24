@@ -11,7 +11,9 @@ Access tokens carry `jti`. Vectors under `testvectors/token/`.
 ## B2 — revoke + introspect
 
 `POST /revoke` and `POST /introspect`. Access revoke denylists `jti`; refresh
-revoke kills the family. UserInfo rejects denylisted tokens.
+revoke kills the family. UserInfo rejects denylisted tokens. Since ADR 0014 /
+ADR 0016, confidential clients authenticate at `/revoke`, and `/introspect`
+callers must authenticate with `private_key_jwt`.
 
 ## B3 — signing key rotation
 

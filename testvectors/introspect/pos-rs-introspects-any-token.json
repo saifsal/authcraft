@@ -1,0 +1,22 @@
+{
+  "id": "pos-rs-introspects-any-token",
+  "source": "generated",
+  "description": "A resource server (rs) authenticated with private_key_jwt sees a token issued to another client.",
+  "steps": {
+    "redirect_uri_spa": "https://app.example/cb",
+    "redirect_uri_svc": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now": 1001,
+    "token_client": "spa",
+    "caller": "rs",
+    "caller_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "caller_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJycyIsInN1YiI6InJzIiwiYXVkIjoiaHR0cHM6Ly9hdXRoLmV4YW1wbGUiLCJqdGkiOiJpbi1ycyIsImV4cCI6MTA2MX0.KZRBXoNvu8lBYJUxjfc7XtVWeL4oKFEfjYACk8puUBFtYoxHV-MEHrsc5uajM9O9Y7g4fyzma_RLIgArmH7IDg"
+  },
+  "expect": {
+    "ok": true,
+    "active": true,
+    "client_id": "spa"
+  }
+}

@@ -54,6 +54,10 @@ fn jar_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/jar")
 }
 
+fn introspect_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/introspect")
+}
+
 fn dcr_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/dcr")
 }
@@ -108,6 +112,37 @@ fn bool_field(v: &Value, name: &str) -> bool {
         Some(Value::Bool(b)) => *b,
         None => false,
         _ => panic!("{name} must be bool"),
+    }
+}
+
+/// Single-key JWKS document for a generated signing key (`kid` = thumbprint).
+fn jwks_for_key(key: &signing::SigningKey) -> String {
+    let kid = key.public.thumbprint();
+    format!(
+        r#"{{"keys":[{{"kid":"{kid}",{}]}}"#,
+        &key.public.canonical_json()[1..]
+    )
+}
+
+/// RFC 7523 client assertion for `client_id`, valid for 60 s from `now`.
+fn client_assertion_for(
+    key: &signing::SigningKey,
+    client_id: &str,
+    jti: &str,
+    now: i64,
+) -> oauth::ClientAssertion {
+    let kid = key.public.thumbprint();
+    let header = format!(r#"{{"alg":"EdDSA","kid":"{kid}"}}"#);
+    let exp = now + 60;
+    let payload = format!(
+        r#"{{"iss":"{client_id}","sub":"{client_id}","aud":"https://auth.example","jti":"{jti}","exp":{exp}}}"#
+    );
+    oauth::ClientAssertion {
+        client_assertion_type: Some(oauth::CLIENT_ASSERTION_TYPE_JWT_BEARER.into()),
+        client_assertion: Some(
+            signing::sign_compact(Alg::EdDSA, &key.pkcs8, header.as_bytes(), payload.as_bytes())
+                .unwrap(),
+        ),
     }
 }
 
@@ -376,12 +411,27 @@ fn run_token_lifecycle_vector(path: &Path) {
         .clone()
         .expect("refresh_token on code exchange");
 
+    // ADR 0016: introspection callers authenticate; `rs` is a resource server.
+    let rs_key = generate_signing_key(Alg::EdDSA).unwrap();
+    srv.create_client(
+        Some(DEMO_ADMIN_TOKEN),
+        Client {
+            resource_server: true,
+            ..Client::private_key_jwt("rs", Vec::new(), jwks_for_key(&rs_key))
+        },
+    )
+    .unwrap_or_else(|e| panic!("{case}: create rs: {e}"));
+    let rs_jti = std::cell::Cell::new(0u32);
+    let introspect = |token: &str, hint: oauth::TokenTypeHint| {
+        rs_jti.set(rs_jti.get() + 1);
+        let auth = client_assertion_for(&rs_key, "rs", &format!("rs-{}", rs_jti.get()), now_token);
+        srv.introspect(token, hint, "rs", &auth, now_token)
+            .unwrap_or_else(|e| panic!("{case}: introspect: {e}"))
+    };
+
     match action {
         "revoke_access" => {
-            assert!(srv
-                .introspect(&first.access_token, oauth::TokenTypeHint::AccessToken, now_token)
-                .unwrap()
-                .active);
+            assert!(introspect(&first.access_token, oauth::TokenTypeHint::AccessToken).active);
             srv.revoke(
                 &first.access_token,
                 oauth::TokenTypeHint::AccessToken,
@@ -389,10 +439,7 @@ fn run_token_lifecycle_vector(path: &Path) {
                 now_token,
             )
             .unwrap();
-            assert!(!srv
-                .introspect(&first.access_token, oauth::TokenTypeHint::AccessToken, now_token)
-                .unwrap()
-                .active);
+            assert!(!introspect(&first.access_token, oauth::TokenTypeHint::AccessToken).active);
             assert_eq!(
                 srv.userinfo(&first.access_token, now_token, None, "https://auth.example/userinfo")
                     .unwrap_err()
@@ -403,10 +450,7 @@ fn run_token_lifecycle_vector(path: &Path) {
         "revoke_refresh" => {
             srv.revoke(&rt, oauth::TokenTypeHint::RefreshToken, client_id, &oauth::ClientAssertion::default(), now_token)
                 .unwrap();
-            assert!(!srv
-                .introspect(&rt, oauth::TokenTypeHint::RefreshToken, now_token)
-                .unwrap()
-                .active);
+            assert!(!introspect(&rt, oauth::TokenTypeHint::RefreshToken).active);
         }
         "refresh" => {
             let second = srv
@@ -880,6 +924,7 @@ fn run_admin_vector(path: &Path) {
                     client_name: optional_string(steps, "client_name").map(str::to_owned),
                     token_endpoint_auth: Default::default(),
                     require_signed_request_object: false,
+                    resource_server: false,
                 },
             )
             .unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -1269,5 +1314,106 @@ fn jar_shared_vectors() {
     assert!(!files.is_empty(), "no jar vectors");
     for f in files {
         run_jar_vector(&f);
+    }
+}
+
+fn run_introspect_vector(path: &Path) {
+    let case = path.display().to_string();
+    let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(string(&root, "id"), path.file_stem().unwrap().to_str().unwrap());
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+    let verifier = string(steps, "code_verifier");
+    let now_auth = integer(steps, "now_authorize");
+    let now = integer(steps, "now");
+    let token_client = string(steps, "token_client");
+    let redirect_uri = string(steps, &format!("redirect_uri_{token_client}"));
+
+    let srv = AuthorizationServer::new(
+        ServerConfig::new("https://auth.example", "api"),
+        vec![
+            Client::new("spa", vec!["https://app.example/cb".into()]),
+            Client::private_key_jwt(
+                "svc",
+                vec!["https://svc.example/cb".into()],
+                CLIENT_AUTH_SVC_JWKS,
+            ),
+            Client {
+                resource_server: true,
+                ..Client::private_key_jwt("rs", Vec::new(), CLIENT_AUTH_SVC_JWKS)
+            },
+        ],
+        generate_signing_key(Alg::EdDSA).expect("key"),
+    );
+
+    let pending = srv
+        .begin_authorize(
+            &AuthorizeRequest {
+                response_type: "code".into(),
+                client_id: token_client.into(),
+                redirect_uri: redirect_uri.into(),
+                code_challenge: pkce::challenge_s256(verifier).unwrap(),
+                code_challenge_method: "S256".into(),
+                state: None,
+                scope: Some("read".into()),
+                nonce: None,
+                request_uri: None,
+                request: None,
+            },
+            now_auth,
+        )
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    let code = srv
+        .finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
+        .unwrap_or_else(|e| panic!("{case}: {e}"))
+        .code;
+    let token_assertion = optional_string(steps, "token_client_assertion");
+    let tok = srv
+        .exchange_token(
+            &TokenRequest {
+                grant_type: "authorization_code".into(),
+                code,
+                redirect_uri: redirect_uri.into(),
+                client_id: token_client.into(),
+                code_verifier: verifier.into(),
+                refresh_token: String::new(),
+                client_assertion_type: token_assertion
+                    .map(|_| oauth::CLIENT_ASSERTION_TYPE_JWT_BEARER.to_owned()),
+                client_assertion: token_assertion.map(str::to_owned),
+            },
+            now,
+            None,
+            "https://auth.example/token",
+        )
+        .unwrap_or_else(|e| panic!("{case}: token: {e}"));
+
+    let caller_auth = oauth::ClientAssertion {
+        client_assertion_type: optional_string(steps, "caller_assertion_type").map(str::to_owned),
+        client_assertion: optional_string(steps, "caller_assertion").map(str::to_owned),
+    };
+    let result = srv.introspect(
+        &tok.access_token,
+        oauth::TokenTypeHint::AccessToken,
+        string(steps, "caller"),
+        &caller_auth,
+        now,
+    );
+    if bool_field(expect, "ok") {
+        let info = result.unwrap_or_else(|e| panic!("{case}: {e}"));
+        assert_eq!(info.active, bool_field(expect, "active"), "{case}");
+        assert_eq!(info.client_id.as_deref(), optional_string(expect, "client_id"), "{case}");
+    } else {
+        let err = result.expect_err("expected introspection failure");
+        assert_eq!(err.code(), string(expect, "error"), "{case}");
+    }
+}
+
+#[test]
+fn introspect_shared_vectors() {
+    let files = load_json_vectors(&introspect_vectors_dir());
+    assert!(!files.is_empty(), "no introspect vectors");
+    for f in files {
+        run_introspect_vector(&f);
     }
 }

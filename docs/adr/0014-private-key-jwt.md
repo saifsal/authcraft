@@ -73,8 +73,8 @@ any client secret.
 
 ## Not in this slice
 
-- Protecting `/introspect` (RFC 7662 §2.1). Its callers are resource servers,
-  which this AS does not register, so it remains unauthenticated.
+- Protecting `/introspect` (RFC 7662 §2.1); done in
+  [ADR 0016](0016-protected-introspection.md).
 - `client_secret_basic`, `client_secret_post`, `client_secret_jwt`, mTLS
   (RFC 8705), and `jwks_uri` fetching.
 - A `typ` requirement on the assertion

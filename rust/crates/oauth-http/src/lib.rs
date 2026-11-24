@@ -255,6 +255,7 @@ async fn admin_list_clients(State(state): State<AppState>, headers: HeaderMap) -
                         "client_name": c.client_name,
                         "token_endpoint_auth_method": c.token_endpoint_auth.method(),
                         "require_signed_request_object": c.require_signed_request_object,
+                        "resource_server": c.resource_server,
                     })
                 })
                 .collect();
@@ -281,6 +282,9 @@ pub struct AdminCreateClientBody {
     /// RFC 9101 §10.5 (ADR 0015 B2).
     #[serde(default)]
     pub require_signed_request_object: bool,
+    /// May introspect any token (ADR 0016); requires `private_key_jwt`.
+    #[serde(default)]
+    pub resource_server: bool,
 }
 
 /// Maps RFC 7591 `token_endpoint_auth_method` + `jwks` to the client model.
@@ -317,6 +321,7 @@ async fn admin_create_client(
         client_name: body.client_name,
         token_endpoint_auth,
         require_signed_request_object: body.require_signed_request_object,
+        resource_server: body.resource_server,
     };
     match state.server.create_client(admin_bearer(&headers), client) {
         Ok(c) => (
@@ -327,6 +332,7 @@ async fn admin_create_client(
                 "client_name": c.client_name,
                 "token_endpoint_auth_method": c.token_endpoint_auth.method(),
                 "require_signed_request_object": c.require_signed_request_object,
+                "resource_server": c.resource_server,
             })),
         )
             .into_response(),
@@ -1388,12 +1394,24 @@ async fn revoke(State(state): State<AppState>, Form(form): Form<RevokeForm>) -> 
 pub struct IntrospectForm {
     pub token: Option<String>,
     pub token_type_hint: Option<String>,
+    /// Caller identity; must be a `private_key_jwt` client (ADR 0016).
+    pub client_id: Option<String>,
+    pub client_assertion_type: Option<String>,
+    pub client_assertion: Option<String>,
 }
 
 async fn introspect(State(state): State<AppState>, Form(form): Form<IntrospectForm>) -> Response {
     let token = form.token.unwrap_or_default();
     let hint = TokenTypeHint::parse(form.token_type_hint.as_deref());
-    match state.server.introspect(&token, hint, now_unix()) {
+    let caller = form.client_id.unwrap_or_default();
+    let client_auth = ClientAssertion {
+        client_assertion_type: form.client_assertion_type,
+        client_assertion: form.client_assertion,
+    };
+    match state
+        .server
+        .introspect(&token, hint, &caller, &client_auth, now_unix())
+    {
         Ok(info) => {
             let mut body = serde_json::json!({ "active": info.active });
             if info.active {
@@ -1417,6 +1435,9 @@ async fn introspect(State(state): State<AppState>, Form(form): Form<IntrospectFo
                 }
             }
             Json(body).into_response()
+        }
+        Err(err @ (OAuthError::InvalidClient | OAuthError::UnauthorizedClient)) => {
+            token_error(err)
         }
         Err(_) => Json(serde_json::json!({ "active": false })).into_response(),
     }

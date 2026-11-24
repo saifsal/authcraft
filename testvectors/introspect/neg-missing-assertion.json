@@ -1,0 +1,19 @@
+{
+  "id": "neg-missing-assertion",
+  "source": "generated",
+  "description": "A resource server that sends no client assertion gets invalid_client.",
+  "steps": {
+    "redirect_uri_spa": "https://app.example/cb",
+    "redirect_uri_svc": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now": 1001,
+    "token_client": "spa",
+    "caller": "rs"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_client"
+  }
+}

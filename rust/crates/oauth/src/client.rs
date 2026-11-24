@@ -33,6 +33,10 @@ pub struct Client {
     /// RFC 9101 §10.5: authorize parameters must arrive in a signed request
     /// object (ADR 0015 B2). Only valid for `private_key_jwt` clients.
     pub require_signed_request_object: bool,
+    /// May introspect tokens issued to any client (RFC 7662 protected
+    /// resource, ADR 0016). Set only through the admin API; requires
+    /// `private_key_jwt`. Other clients introspect only their own tokens.
+    pub resource_server: bool,
 }
 
 impl Client {
@@ -44,6 +48,7 @@ impl Client {
             client_name: None,
             token_endpoint_auth: TokenEndpointAuth::None,
             require_signed_request_object: false,
+            resource_server: false,
         }
     }
 

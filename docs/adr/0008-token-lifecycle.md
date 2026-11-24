@@ -46,7 +46,9 @@ lifecycle pieces on the same Rust crates without confidential-client auth.
 2. **`POST /introspect` (RFC 7662):** form `token` (+ optional hint / `client_id`).
    Response includes `active` and, when active, `client_id`, `sub`, `scope`,
    `exp`, `iat`, `token_type`. No client authentication in this educational
-   demo (document as non-production).
+   demo (document as non-production). *Superseded by
+   [ADR 0016](0016-protected-introspection.md): callers authenticate with
+   `private_key_jwt`; revocation authenticates per ADR 0014 B2.*
 3. **UserInfo** (and other access-token acceptors) reject denylisted `jti` with
    `invalid_token` after JOSE verification.
 

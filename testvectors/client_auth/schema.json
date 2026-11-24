@@ -70,6 +70,11 @@
         "token": {
           "type": "string",
           "description": "Token presented to /revoke."
+        },
+        "require_client_assertion_typ": {
+          "type": "boolean",
+          "default": false,
+          "description": "ServerConfig.require_client_assertion_typ (ADR 0014 B3)."
         }
       }
     },

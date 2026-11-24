@@ -71,14 +71,32 @@ any client secret.
    authenticated it still answers 200 whether or not the token was valid.
 6. Vectors: `endpoint: "par"` / `"revoke"` cases in `testvectors/client_auth/`.
 
+### B3 — Explicit typing of client assertions
+
+1. After the signature verifies, the assertion header `typ` is checked
+   (compared like ADR 0003: one leading `application/` stripped,
+   case-insensitive):
+   - absent, `JWT`, or `client-authentication+jwt` (draft-ietf-oauth-rfc7523bis)
+     are accepted;
+   - any other value is `invalid_client`.
+2. Reason: a JAR request object (ADR 0015) is signed with the same client key
+   and has the same `iss` and `aud`. If it also carries `sub` and `jti`, it
+   passes every claim check here, and it travels through the user agent.
+   `neg-typ-request-object` is such a JWT; without this rule it obtains tokens.
+   Request objects already require `typ` `oauth-authz-req+jwt`, so the reverse
+   confusion was closed by ADR 0015.
+3. `ServerConfig.require_client_assertion_typ` (default `false`) accepts only
+   `client-authentication+jwt`.
+4. The `jose` verifier contract is unchanged; `oauth::client_auth` reads the
+   already-verified header.
+
 ## Not in this slice
 
 - Protecting `/introspect` (RFC 7662 §2.1); done in
   [ADR 0016](0016-protected-introspection.md).
 - `client_secret_basic`, `client_secret_post`, `client_secret_jwt`, mTLS
   (RFC 8705), and `jwks_uri` fetching.
-- A `typ` requirement on the assertion
-  (`client-authentication+jwt` from rfc7523bis).
+- Making `client-authentication+jwt` mandatory by default (opt-in via B3).
 
 ## Consequences
 

@@ -1,0 +1,19 @@
+{
+  "id": "neg-typ-access-token",
+  "source": "generated",
+  "description": "An assertion typed at+jwt is refused.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLWF0IiwiZXhwIjoxMDYxfQ.lzD6bT1GFrhSDMOJ5gOcH5cBR8R5jeIvrkQp2qTBbPyU61T7gNWIIYLAo8N3HxeD9R3eP2UznRPY18G0p4cMAg"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_client"
+  }
+}

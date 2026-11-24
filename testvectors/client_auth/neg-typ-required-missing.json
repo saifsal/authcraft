@@ -1,0 +1,20 @@
+{
+  "id": "neg-typ-required-missing",
+  "source": "generated",
+  "description": "With require_client_assertion_typ, an assertion without typ is refused.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "require_client_assertion_typ": true,
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLTEiLCJleHAiOjEwNjF9.ubdq3TOd_dUW0WFUWY56dNltjb32l9cUCP-_xBBpbG6BIPTE2n3Ze6XKnyWQCromwv41G1yxs-tZDj0BBvsaCg"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_client"
+  }
+}

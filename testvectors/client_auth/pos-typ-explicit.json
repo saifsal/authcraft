@@ -1,0 +1,18 @@
+{
+  "id": "pos-typ-explicit",
+  "source": "generated",
+  "description": "An assertion with header typ client-authentication+jwt (rfc7523bis) is accepted.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIiLCJ0eXAiOiJjbGllbnQtYXV0aGVudGljYXRpb24rand0In0.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLXR5cCIsImV4cCI6MTA2MX0.YUTSrz_P2XGyD2m6ZpoHKBbHJ9ybC8aJD-iQvOrd-w6y2trzv9JN6-1Dc5hzPGVolaqxNCkZdUyKzrvjXiFTAA"
+  },
+  "expect": {
+    "ok": true
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "neg-typ-request-object",
+  "source": "generated",
+  "description": "A signed JAR request object (typ oauth-authz-req+jwt) that also carries sub and jti is refused as a client assertion: it travels through the browser.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIiLCJ0eXAiOiJvYXV0aC1hdXRoei1yZXErand0In0.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLXJvIiwiZXhwIjoxMDYxLCJjbGllbnRfaWQiOiJzdmMiLCJyZXNwb25zZV90eXBlIjoiY29kZSIsInJlZGlyZWN0X3VyaSI6Imh0dHBzOi8vc3ZjLmV4YW1wbGUvY2IiLCJjb2RlX2NoYWxsZW5nZSI6IkU5TWVsaG9hMk93dkZyRU1USmd1Q0hhb2VLMXQ4VVJXYnVHSlNzdHctY00iLCJjb2RlX2NoYWxsZW5nZV9tZXRob2QiOiJTMjU2In0.9GXVzsLO6Cl6VwoYZaA6cwJVJVehge_zGZ6AdeeOBkXIuYkgmI5cY_bnB5_u58RSV38IdTltT0SFFjwrLvQHDQ"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_client"
+  }
+}

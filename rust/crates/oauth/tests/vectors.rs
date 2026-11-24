@@ -1092,8 +1092,12 @@ const CLIENT_AUTH_SVC_JWKS: &str = r#"{"keys":[{"kty":"OKP","crv":"Ed25519","kid
 /// Server for `testvectors/client_auth/` and `testvectors/jar/`: public `spa`,
 /// `private_key_jwt` `svc`, and `svc-strict` (also requires signed request objects).
 fn make_confidential_server() -> AuthorizationServer {
+    make_confidential_server_with(ServerConfig::new("https://auth.example", "api"))
+}
+
+fn make_confidential_server_with(config: ServerConfig) -> AuthorizationServer {
     AuthorizationServer::new(
-        ServerConfig::new("https://auth.example", "api"),
+        config,
         vec![
             Client::new("spa", vec!["https://app.example/cb".into()]),
             Client::private_key_jwt(
@@ -1127,7 +1131,9 @@ fn run_client_auth_vector(path: &Path) {
     let now_auth = integer(steps, "now_authorize");
     let now_token = integer(steps, "now_token");
 
-    let srv = make_confidential_server();
+    let mut config = ServerConfig::new("https://auth.example", "api");
+    config.require_client_assertion_typ = bool_field(steps, "require_client_assertion_typ");
+    let srv = make_confidential_server_with(config);
     let authorize_request = || AuthorizeRequest {
         response_type: "code".into(),
         client_id: client_id.into(),

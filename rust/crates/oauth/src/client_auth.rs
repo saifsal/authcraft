@@ -10,13 +10,19 @@
 //!   draft-ietf-oauth-rfc7523bis.
 //! - `exp` is required and at most [`CLIENT_ASSERTION_MAX_LIFETIME_SECS`] ahead.
 //! - `jti` is required and single-use until `exp`.
+//! - header `typ`, when present, is `client-authentication+jwt` or the generic
+//!   `JWT` (ADR 0014 B3). Any other explicit type, such as a JAR request object
+//!   (`oauth-authz-req+jwt`) or an access token (`at+jwt`), is refused so a JWT
+//!   minted for another purpose cannot authenticate the client. With
+//!   `require_typ`, only `client-authentication+jwt` is accepted.
 //!
 //! Every failure is `invalid_client`.
 
 use std::collections::HashMap;
 
 use jose::alg::Alg;
-use jose::json::Value;
+use jose::b64url;
+use jose::json::{self, Value};
 use jose::jwks::Jwks;
 use jose::verify::{self, Policy};
 
@@ -25,6 +31,9 @@ use crate::error::OAuthError;
 /// RFC 7523 §2.2 `client_assertion_type` value.
 pub const CLIENT_ASSERTION_TYPE_JWT_BEARER: &str =
     "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+
+/// Explicit client assertion `typ` (draft-ietf-oauth-rfc7523bis).
+pub const CLIENT_ASSERTION_TYP: &str = "client-authentication+jwt";
 
 /// Largest accepted `exp - now` for a client assertion (seconds).
 pub const CLIENT_ASSERTION_MAX_LIFETIME_SECS: i64 = 300;
@@ -77,13 +86,46 @@ pub fn parse_client_jwks(jwks_json: &str) -> Result<Jwks, OAuthError> {
 
 /// Verifies a `private_key_jwt` assertion for `client_id`.
 ///
+/// Header `typ` rule for client assertions (ADR 0014 B3). Compared like the
+/// verifier's `typ` check: one leading `application/` stripped, then
+/// case-insensitive.
+fn assertion_typ_allowed(typ: Option<&str>, require_typ: bool) -> bool {
+    let Some(typ) = typ else {
+        return !require_typ;
+    };
+    let typ = match typ.get(..12) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("application/") => &typ[12..],
+        _ => typ,
+    };
+    if typ.eq_ignore_ascii_case(CLIENT_ASSERTION_TYP) {
+        true
+    } else {
+        typ.eq_ignore_ascii_case("JWT") && !require_typ
+    }
+}
+
+/// Reads header `typ` from a compact JWS whose signature already verified.
+/// `Err` if the member is present but not a string.
+fn header_typ(assertion: &str) -> Result<Option<String>, OAuthError> {
+    let header_b64 = assertion.split('.').next().ok_or(OAuthError::InvalidClient)?;
+    let bytes = b64url::decode(header_b64).map_err(|_| OAuthError::InvalidClient)?;
+    let header = json::parse(&bytes).map_err(|_| OAuthError::InvalidClient)?;
+    match header.get("typ") {
+        None => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(OAuthError::InvalidClient),
+    }
+}
+
 /// `issuer` is the AS issuer identifier and the only accepted audience.
+/// `require_typ` demands an explicit `client-authentication+jwt` header type.
 pub fn verify_client_assertion(
     assertion: &str,
     client_id: &str,
     client_jwks: &str,
     issuer: &str,
     now: i64,
+    require_typ: bool,
     cache: &mut ClientAssertionJtiCache,
 ) -> Result<(), OAuthError> {
     let jwks = Jwks::parse(client_jwks.as_bytes()).map_err(|_| OAuthError::InvalidClient)?;
@@ -101,6 +143,10 @@ pub fn verify_client_assertion(
         },
     )
     .map_err(|_| OAuthError::InvalidClient)?;
+    // The signature covers the header, so it is safe to read now.
+    if !assertion_typ_allowed(header_typ(assertion)?.as_deref(), require_typ) {
+        return Err(OAuthError::InvalidClient);
+    }
 
     let claims = &verified.claims;
     if claims.get("sub").and_then(Value::as_str) != Some(client_id) {
@@ -158,11 +204,11 @@ mod tests {
         let a = assertion(&key, &kid, &claims("svc", "svc", AS, "j1", 1_060));
         let mut cache = ClientAssertionJtiCache::new();
         assert_eq!(
-            verify_client_assertion(&a, "svc", &jwks, AS, 1_000, &mut cache),
+            verify_client_assertion(&a, "svc", &jwks, AS, 1_000, false, &mut cache),
             Ok(())
         );
         assert_eq!(
-            verify_client_assertion(&a, "svc", &jwks, AS, 1_001, &mut cache),
+            verify_client_assertion(&a, "svc", &jwks, AS, 1_001, false, &mut cache),
             Err(OAuthError::InvalidClient)
         );
     }
@@ -183,7 +229,7 @@ mod tests {
             let a = assertion(&key, &kid, &c);
             let mut cache = ClientAssertionJtiCache::new();
             assert_eq!(
-                verify_client_assertion(&a, "svc", &jwks, AS, 1_000, &mut cache),
+                verify_client_assertion(&a, "svc", &jwks, AS, 1_000, false, &mut cache),
                 Err(OAuthError::InvalidClient),
                 "{c}"
             );
@@ -198,7 +244,7 @@ mod tests {
         );
         let a = assertion(&key, &kid, &c);
         let mut cache = ClientAssertionJtiCache::new();
-        assert!(verify_client_assertion(&a, "svc", &jwks, AS, 1_000, &mut cache).is_ok());
+        assert!(verify_client_assertion(&a, "svc", &jwks, AS, 1_000, false, &mut cache).is_ok());
     }
 
     #[test]
@@ -208,7 +254,7 @@ mod tests {
         let a = assertion(&attacker, &kid, &claims("svc", "svc", AS, "j", 1_060));
         let mut cache = ClientAssertionJtiCache::new();
         assert_eq!(
-            verify_client_assertion(&a, "svc", &jwks, AS, 1_000, &mut cache),
+            verify_client_assertion(&a, "svc", &jwks, AS, 1_000, false, &mut cache),
             Err(OAuthError::InvalidClient)
         );
     }
@@ -228,5 +274,35 @@ mod tests {
         assert!(parse_client_jwks("nope").is_err());
         let (_, jwks, _) = setup();
         assert!(parse_client_jwks(&jwks).is_ok());
+    }
+
+    fn assertion_with_typ(key: &SigningKey, kid: &str, typ: &str, jti: &str) -> String {
+        let header = format!(r#"{{"alg":"EdDSA","kid":"{kid}","typ":"{typ}"}}"#);
+        let c = claims("svc", "svc", AS, jti, 1_060);
+        sign_compact(Alg::EdDSA, &key.pkcs8, header.as_bytes(), c.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn typ_rules() {
+        let (key, jwks, kid) = setup();
+        let check = |typ: &str, jti: &str, require: bool| {
+            let a = assertion_with_typ(&key, &kid, typ, jti);
+            let mut cache = ClientAssertionJtiCache::new();
+            verify_client_assertion(&a, "svc", &jwks, AS, 1_000, require, &mut cache)
+        };
+        assert_eq!(check("client-authentication+jwt", "t1", false), Ok(()));
+        assert_eq!(check("application/Client-Authentication+JWT", "t2", true), Ok(()));
+        assert_eq!(check("JWT", "t3", false), Ok(()));
+        for typ in ["oauth-authz-req+jwt", "at+jwt", "dpop+jwt", "secevent+jwt"] {
+            assert_eq!(check(typ, "t4", false), Err(OAuthError::InvalidClient), "{typ}");
+        }
+        assert_eq!(check("JWT", "t5", true), Err(OAuthError::InvalidClient));
+        // No typ: accepted unless required.
+        let a = assertion(&key, &kid, &claims("svc", "svc", AS, "t6", 1_060));
+        let mut cache = ClientAssertionJtiCache::new();
+        assert_eq!(
+            verify_client_assertion(&a, "svc", &jwks, AS, 1_000, true, &mut cache),
+            Err(OAuthError::InvalidClient)
+        );
     }
 }

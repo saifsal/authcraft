@@ -91,7 +91,7 @@ Profile: [ADR 0009](adr/0009-hardening-par-dpop.md). Narrative: [oauth-m4.md](oa
 | RFC 9449 | Optional DPoP; `cnf.jkt`; UserInfo proof when bound; DPoP-bound refresh; AS `DPoP-Nonce` | `testvectors/dpop/` + `oauth::dpop` / refresh `dpop_jkt` |
 | RFC 9207 | `iss` on authorize success redirect; discovery flag | `AuthorizationSuccess.iss` + e2e |
 | RFC 9700 | BCP mapped to done/partial/open | [rfc-9700-checklist.md](rfc-9700-checklist.md) |
-| RFC 7523 §2.2 / OIDC Core §9 | `private_key_jwt` client auth at `/token`, `/par`, `/revoke`; `aud` = issuer; single-use `jti`; `invalid_client` | `testvectors/client_auth/` + `oauth::client_auth` (ADR 0014) |
+| RFC 7523 §2.2 / OIDC Core §9 | `private_key_jwt` client auth at `/token`, `/par`, `/revoke`; `aud` = issuer; single-use `jti`; foreign `typ` refused; `invalid_client` | `testvectors/client_auth/` + `oauth::client_auth` (ADR 0014) |
 | RFC 9101 | Signed `request` by value at `/authorize` and `/par`; `typ` `oauth-authz-req+jwt`; signed claims only; `invalid_request_object` | `testvectors/jar/` + `oauth::request_object` (ADR 0015) |
 
 ## M5 authentication

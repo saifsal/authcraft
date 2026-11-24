@@ -51,6 +51,9 @@ pub struct ServerConfig {
     pub rp_origin: String,
     /// Bearer token for `/admin` and SCIM (ADR 0011). Empty disables admin.
     pub admin_token: String,
+    /// When true, client assertions must carry header
+    /// `typ: client-authentication+jwt` (ADR 0014 B3).
+    pub require_client_assertion_typ: bool,
 }
 
 /// Published demo admin bearer token (educational only).
@@ -76,6 +79,7 @@ impl ServerConfig {
             rp_id,
             rp_origin,
             admin_token: String::new(),
+            require_client_assertion_typ: false,
         }
     }
 }
@@ -413,6 +417,7 @@ impl AuthorizationServer {
                     jwks,
                     &self.config.issuer,
                     now,
+                    self.config.require_client_assertion_typ,
                     &mut cache,
                 )?;
             }

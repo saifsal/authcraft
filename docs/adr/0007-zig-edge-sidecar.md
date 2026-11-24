@@ -27,6 +27,21 @@ sidecar that uses that ABI.
 5. Shared verify wiring is unit-tested without binding a socket; `zig build test`
    covers it. `zig build sidecar` installs the binary.
 
+## Amendments
+
+### B2 — Refuse sender-constrained tokens (2026-11-25)
+
+1. A token that `authcraft_jose_verify` accepts but whose payload has a `cnf`
+   member (DPoP `jkt`, ADR 0009; mTLS `x5t#S256`, ADR 0017) gets `401` with
+   `{"error":"token_binding_unsupported"}`.
+2. Reason: the sidecar sees only the bearer string. It cannot check a DPoP
+   proof (method, URL, nonce) or the caller's TLS certificate, so accepting
+   the token would let anyone who copied it bypass the binding.
+3. `token_binding_unsupported` is a sidecar code, not an ADR 0003 verifier
+   code; the shared vector contract is unchanged. The payload is read only
+   after the signature verified, and a payload that cannot be decoded counts
+   as bound (fail closed).
+
 ## Consequences
 
 - Edge demos can gate requests with the same verdicts as the shared vector suite.

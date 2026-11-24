@@ -16,6 +16,7 @@ Educational mapping of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
 | Refresh / access revocation | done | ADR 0008 B2 |
 | Sender-constrained access tokens (DPoP) | partial | Optional DPoP (ADR 0009); Bearer still allowed |
 | Sender-constrained access tokens (mTLS) | partial | `cnf.x5t#S256` when a client certificate is presented (ADR 0017); optional |
+| Bound tokens at resource servers | done | `oauth-http` UserInfo checks DPoP / certificate; Zig `authcraft-edge` refuses `cnf` tokens it cannot check (ADR 0007 B2) |
 | Pushed Authorization Requests | partial | Optional PAR; `require_par` available (ADR 0009) |
 | Mix-up mitigation (`iss` on AS responses) | done | RFC 9207 `iss` on authorize success redirects |
 | Confidential clients / client auth | partial | `private_key_jwt` at `/token`, `/par`, `/revoke` (ADR 0014) and `/introspect` (ADR 0016); explicit assertion `typ` (B3); `self_signed_tls_client_auth` (ADR 0017); no PKI `tls_client_auth` |

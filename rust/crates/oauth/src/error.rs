@@ -11,6 +11,8 @@ pub enum OAuthError {
     InvalidClient,
     InvalidGrant,
     UnsupportedGrantType,
+    /// RFC 9101 request object failed verification (ADR 0015).
+    InvalidRequestObject,
     /// Bearer access token rejected at UserInfo (RFC 6750).
     InvalidToken,
     /// DPoP proof missing or wrong `nonce`; retry with `DPoP-Nonce` (RFC 9449).
@@ -27,6 +29,7 @@ impl OAuthError {
             OAuthError::InvalidClient => "invalid_client",
             OAuthError::InvalidGrant => "invalid_grant",
             OAuthError::UnsupportedGrantType => "unsupported_grant_type",
+            OAuthError::InvalidRequestObject => "invalid_request_object",
             OAuthError::InvalidToken => "invalid_token",
             OAuthError::UseDpopNonce => "use_dpop_nonce",
             OAuthError::ServerError => "server_error",

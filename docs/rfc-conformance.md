@@ -92,6 +92,7 @@ Profile: [ADR 0009](adr/0009-hardening-par-dpop.md). Narrative: [oauth-m4.md](oa
 | RFC 9207 | `iss` on authorize success redirect; discovery flag | `AuthorizationSuccess.iss` + e2e |
 | RFC 9700 | BCP mapped to done/partial/open | [rfc-9700-checklist.md](rfc-9700-checklist.md) |
 | RFC 7523 §2.2 / OIDC Core §9 | `private_key_jwt` client auth at `/token`, `/par`, `/revoke`; `aud` = issuer; single-use `jti`; `invalid_client` | `testvectors/client_auth/` + `oauth::client_auth` (ADR 0014) |
+| RFC 9101 | Signed `request` by value at `/authorize` and `/par`; `typ` `oauth-authz-req+jwt`; signed claims only; `invalid_request_object` | `testvectors/jar/` + `oauth::request_object` (ADR 0015) |
 
 ## M5 authentication
 
@@ -135,7 +136,7 @@ Profile: [ADR 0013](adr/0013-assurance.md). Narrative: [oauth-m8.md](oauth-m8.md
 ## Other RFCs referenced by the project
 
 Remaining gaps called out in the RFC 9700 and OpenID checklists (client auth at
-`/introspect`, JAR, full OIDF suite in CI, etc.) stay
+`/introspect`, `request_uri` fetch / JWE request objects, full OIDF suite in CI, etc.) stay
 operator/follow-on work.
 
 ## Checked-in RFC vectors

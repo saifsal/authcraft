@@ -50,6 +50,10 @@ fn client_auth_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/client_auth")
 }
 
+fn jar_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/jar")
+}
+
 fn dcr_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/dcr")
 }
@@ -154,6 +158,7 @@ fn run_code_flow_vector(path: &Path) {
         scope: optional_string(steps, "scope").map(str::to_owned),
         nonce: optional_string(steps, "nonce").map(str::to_owned),
                 request_uri: None,
+                request: None,
         }, now_auth);
 
     let phase = optional_string(expect, "phase").unwrap_or(if ok { "token" } else { "authorize" });
@@ -346,6 +351,7 @@ fn run_token_lifecycle_vector(path: &Path) {
             scope: optional_string(steps, "scope").map(str::to_owned),
             nonce: None,
                     request_uri: None,
+                    request: None,
         }, now_auth)
         .unwrap_or_else(|e| panic!("{case}: authorize: {e}"));
     let issued = srv
@@ -524,6 +530,7 @@ fn run_par_vector(path: &Path) {
                 scope: optional_string(steps, "scope").map(str::to_owned),
                 nonce: None,
                 request_uri: None,
+                request: None,
             },
             &oauth::ClientAssertion::default(),
             now_par,
@@ -544,6 +551,7 @@ fn run_par_vector(path: &Path) {
                         scope: None,
                         nonce: None,
                         request_uri: Some(pushed.request_uri),
+                        request: None,
                     },
                     now_auth,
                 )
@@ -579,6 +587,7 @@ fn run_par_vector(path: &Path) {
                     scope: None,
                     nonce: None,
                     request_uri: Some(pushed.request_uri.clone()),
+                    request: None,
                 },
                 now_auth,
             )
@@ -595,6 +604,7 @@ fn run_par_vector(path: &Path) {
                         scope: None,
                         nonce: None,
                         request_uri: Some(pushed.request_uri),
+                        request: None,
                     },
                     now_auth + 1,
                 )
@@ -642,6 +652,7 @@ fn run_dpop_vector(path: &Path) {
                 scope: Some("read".into()),
                 nonce: None,
                 request_uri: None,
+                request: None,
             },
             now_auth,
         )
@@ -888,6 +899,7 @@ fn run_admin_vector(path: &Path) {
                         scope: Some("read".into()),
                         nonce: None,
                         request_uri: None,
+                        request: None,
                     },
                     now_auth,
                 )
@@ -986,6 +998,7 @@ fn run_dcr_vector(path: &Path) {
                         scope: Some("read".into()),
                         nonce: None,
                         request_uri: None,
+                        request: None,
                     },
                     now_auth,
                 )
@@ -1028,6 +1041,23 @@ fn dcr_shared_vectors() {
 /// Client JWKS for `svc` in `testvectors/client_auth/schema.json` (RFC 8037 A.2 public key).
 const CLIENT_AUTH_SVC_JWKS: &str = r#"{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"rfc8037-a2","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#;
 
+/// Server for `testvectors/client_auth/` and `testvectors/jar/`: public `spa`
+/// and `private_key_jwt` `svc`.
+fn make_confidential_server() -> AuthorizationServer {
+    AuthorizationServer::new(
+        ServerConfig::new("https://auth.example", "api"),
+        vec![
+            Client::new("spa", vec!["https://app.example/cb".into()]),
+            Client::private_key_jwt(
+                "svc",
+                vec!["https://svc.example/cb".into()],
+                CLIENT_AUTH_SVC_JWKS,
+            ),
+        ],
+        generate_signing_key(Alg::EdDSA).expect("key"),
+    )
+}
+
 fn run_client_auth_vector(path: &Path) {
     let case = path.display().to_string();
     let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -1041,19 +1071,7 @@ fn run_client_auth_vector(path: &Path) {
     let now_auth = integer(steps, "now_authorize");
     let now_token = integer(steps, "now_token");
 
-    let key = generate_signing_key(Alg::EdDSA).expect("key");
-    let srv = AuthorizationServer::new(
-        ServerConfig::new("https://auth.example", "api"),
-        vec![
-            Client::new("spa", vec!["https://app.example/cb".into()]),
-            Client::private_key_jwt(
-                "svc",
-                vec!["https://svc.example/cb".into()],
-                CLIENT_AUTH_SVC_JWKS,
-            ),
-        ],
-        key,
-    );
+    let srv = make_confidential_server();
     let authorize_request = || AuthorizeRequest {
         response_type: "code".into(),
         client_id: client_id.into(),
@@ -1064,6 +1082,7 @@ fn run_client_auth_vector(path: &Path) {
         scope: Some("read".into()),
         nonce: None,
         request_uri: None,
+        request: None,
     };
     let issue_code = || {
         let pending = srv
@@ -1163,5 +1182,81 @@ fn client_auth_shared_vectors() {
     assert!(!files.is_empty(), "no client_auth vectors");
     for f in files {
         run_client_auth_vector(&f);
+    }
+}
+
+fn run_jar_vector(path: &Path) {
+    let case = path.display().to_string();
+    let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(string(&root, "id"), path.file_stem().unwrap().to_str().unwrap());
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+    let client_id = string(steps, "client_id");
+    let now = integer(steps, "now");
+    let empty = Value::Object(Vec::new());
+    let outer = steps.get("outer").unwrap_or(&empty);
+    let outer_str = |name: &str| optional_string(outer, name).map(str::to_owned);
+
+    let srv = make_confidential_server();
+    let req = AuthorizeRequest {
+        response_type: outer_str("response_type").unwrap_or_default(),
+        client_id: client_id.into(),
+        redirect_uri: outer_str("redirect_uri").unwrap_or_default(),
+        code_challenge: outer_str("code_challenge").unwrap_or_default(),
+        code_challenge_method: outer_str("code_challenge_method").unwrap_or_default(),
+        state: outer_str("state"),
+        scope: outer_str("scope"),
+        nonce: outer_str("nonce"),
+        request_uri: outer_str("request_uri"),
+        request: Some(string(steps, "request").into()),
+    };
+    let result = match string(steps, "endpoint") {
+        "authorize" => srv.begin_authorize(&req, now),
+        "par" => {
+            let client_auth = oauth::ClientAssertion {
+                client_assertion_type: optional_string(steps, "client_assertion_type")
+                    .map(str::to_owned),
+                client_assertion: optional_string(steps, "client_assertion").map(str::to_owned),
+            };
+            srv.push_authorization(&req, &client_auth, now).and_then(|par| {
+                srv.begin_authorize(
+                    &AuthorizeRequest {
+                        response_type: String::new(),
+                        client_id: client_id.into(),
+                        redirect_uri: String::new(),
+                        code_challenge: String::new(),
+                        code_challenge_method: String::new(),
+                        state: None,
+                        scope: None,
+                        nonce: None,
+                        request_uri: Some(par.request_uri),
+                        request: None,
+                    },
+                    now,
+                )
+            })
+        }
+        other => panic!("{case}: unknown endpoint {other}"),
+    };
+
+    if bool_field(expect, "ok") {
+        let pending = result.unwrap_or_else(|e| panic!("{case}: {e}"));
+        assert_eq!(pending.client_id, client_id, "{case}");
+        assert_eq!(pending.redirect_uri, string(expect, "redirect_uri"), "{case}");
+        assert_eq!(pending.state.as_deref(), optional_string(expect, "state"), "{case}");
+        assert_eq!(pending.code_challenge, string(expect, "code_challenge"), "{case}");
+    } else {
+        let err = result.expect_err("expected request object failure");
+        assert_eq!(err.code(), string(expect, "error"), "{case}");
+    }
+}
+
+#[test]
+fn jar_shared_vectors() {
+    let files = load_json_vectors(&jar_vectors_dir());
+    assert!(!files.is_empty(), "no jar vectors");
+    for f in files {
+        run_jar_vector(&f);
     }
 }

@@ -1,0 +1,15 @@
+{
+  "id": "neg-jar-unregistered-redirect",
+  "source": "generated",
+  "description": "A validly signed request object still needs a registered redirect_uri.",
+  "steps": {
+    "client_id": "svc",
+    "now": 1000,
+    "endpoint": "authorize",
+    "request": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIiLCJ0eXAiOiJvYXV0aC1hdXRoei1yZXErand0In0.eyJpc3MiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNsaWVudF9pZCI6InN2YyIsImV4cCI6MTA2MCwicmVzcG9uc2VfdHlwZSI6ImNvZGUiLCJyZWRpcmVjdF91cmkiOiJodHRwczovL2V2aWwuZXhhbXBsZS9jYiIsImNvZGVfY2hhbGxlbmdlIjoiRTlNZWxob2EyT3d2RnJFTVRKZ3VDSGFvZUsxdDhVUldidUdKU3N0dy1jTSIsImNvZGVfY2hhbGxlbmdlX21ldGhvZCI6IlMyNTYiLCJzdGF0ZSI6InNpZ25lZC1zdGF0ZSIsInNjb3BlIjoicmVhZCJ9.Eh7nzebPtWdS9f5r8Uvfmc7j1Mq_CXC_h4VTAjR5M5RbR2pwQllu5FmSzndlc87cn_CYJuZZTkgKSbut63lTBg"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

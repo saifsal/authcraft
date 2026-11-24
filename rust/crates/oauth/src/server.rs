@@ -20,6 +20,7 @@ use crate::id_token::{self, IdTokenClaims};
 use crate::keyring::{Keyring, DEFAULT_VERIFY_GRACE_SECS};
 use crate::par::{ParRecord, ParStore, DEFAULT_PAR_TTL_SECS};
 use crate::pkce::{self, require_s256_method};
+use crate::request_object;
 use crate::refresh::{RefreshStore, DEFAULT_REFRESH_TOKEN_TTL_SECS};
 use crate::token::{self, TokenClaims, DEFAULT_ACCESS_TOKEN_TTL_SECS};
 use crate::scim::{self, ScimUser};
@@ -177,6 +178,9 @@ pub struct AuthorizeRequest {
     pub nonce: Option<String>,
     /// When set, other authorize fields are loaded from the PAR store (ADR 0009).
     pub request_uri: Option<String>,
+    /// RFC 9101 request object (JAR, ADR 0015). When set, the other authorize
+    /// fields except `client_id` are taken from its signed claims.
+    pub request: Option<String>,
 }
 
 /// RFC 7523 client assertion parameters sent to a back-channel endpoint
@@ -757,7 +761,7 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"scopes_supported":["openid","profile","email"]}}"#,
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"request_parameter_supported":true,"request_uri_parameter_supported":false,"request_object_signing_alg_values_supported":["EdDSA","ES256"],"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"scopes_supported":["openid","profile","email"]}}"#,
             require_par = if self.config.require_par {
                 "true"
             } else {
@@ -896,6 +900,45 @@ impl AuthorizationServer {
         Ok((Some(verified.jkt), Some(next)))
     }
 
+    /// Replaces authorize parameters with the claims of a verified RFC 9101
+    /// request object (ADR 0015). Without `request`, returns `req` unchanged.
+    fn expand_request_object(
+        &self,
+        req: &AuthorizeRequest,
+        now: i64,
+    ) -> Result<AuthorizeRequest, OAuthError> {
+        let Some(jwt) = req.request.as_deref() else {
+            return Ok(req.clone());
+        };
+        if req.request_uri.is_some() || jwt.is_empty() {
+            return Err(OAuthError::InvalidRequest);
+        }
+        let client = self.lookup_client(&req.client_id)?;
+        // Only clients with a registered JWKS can sign request objects.
+        let TokenEndpointAuth::PrivateKeyJwt { jwks } = &client.token_endpoint_auth else {
+            return Err(OAuthError::InvalidRequestObject);
+        };
+        let p = request_object::verify_request_object(
+            jwt,
+            &req.client_id,
+            jwks,
+            &self.config.issuer,
+            now,
+        )?;
+        Ok(AuthorizeRequest {
+            response_type: p.response_type.unwrap_or_default(),
+            client_id: req.client_id.clone(),
+            redirect_uri: p.redirect_uri.unwrap_or_default(),
+            code_challenge: p.code_challenge.unwrap_or_default(),
+            code_challenge_method: p.code_challenge_method.unwrap_or_default(),
+            state: p.state,
+            scope: p.scope,
+            nonce: p.nonce,
+            request_uri: None,
+            request: None,
+        })
+    }
+
     /// Pushes authorize parameters and returns a one-time `request_uri` (ADR 0009).
     ///
     /// `private_key_jwt` clients authenticate with `client_auth` (RFC 9126 §2,
@@ -915,6 +958,7 @@ impl AuthorizationServer {
         if req.request_uri.is_some() {
             return Err(OAuthError::InvalidRequest);
         }
+        let req = &self.expand_request_object(req, now)?;
         let pending = self.validate_authorize_params(req)?;
         let record = ParRecord {
             client_id: req.client_id.clone(),
@@ -942,7 +986,7 @@ impl AuthorizationServer {
         now: i64,
     ) -> Result<PendingAuthorization, OAuthError> {
         if let Some(uri) = req.request_uri.as_deref() {
-            if uri.is_empty() {
+            if uri.is_empty() || req.request.is_some() {
                 return Err(OAuthError::InvalidRequest);
             }
             let mut store = self.par.lock().map_err(|_| OAuthError::ServerError)?;
@@ -961,13 +1005,15 @@ impl AuthorizationServer {
                 scope: record.scope,
                 nonce: record.nonce,
                 request_uri: None,
+                request: None,
             };
             return self.validate_authorize_params(&expanded);
         }
         if self.config.require_par {
             return Err(OAuthError::InvalidRequest);
         }
-        self.validate_authorize_params(req)
+        let req = self.expand_request_object(req, now)?;
+        self.validate_authorize_params(&req)
     }
 
     fn validate_authorize_params(
@@ -1393,6 +1439,7 @@ mod tests {
             scope: Some("read".into()),
             nonce: None,
                     request_uri: None,
+                    request: None,
         }, 1_000)
         .unwrap()
     }
@@ -1461,6 +1508,7 @@ mod tests {
                 scope: Some("openid profile".into()),
                 nonce: Some("n-0S6_WzA2Mj".into()),
                         request_uri: None,
+                        request: None,
         }, 1_000)
             .unwrap();
         let issued = srv
@@ -1535,6 +1583,7 @@ mod tests {
             scope: Some("openid".into()),
             nonce: None,
                     request_uri: None,
+                    request: None,
         }, 1_000);
         assert_eq!(err, Err(OAuthError::InvalidRequest));
     }
@@ -1636,6 +1685,7 @@ mod tests {
                 scope: None,
                 nonce: None,
                 request_uri: None,
+                request: None,
             },
             1_000,
         );
@@ -1658,6 +1708,7 @@ mod tests {
                     scope: Some("read".into()),
                     nonce: None,
                     request_uri: None,
+                    request: None,
                 },
                 &ClientAssertion::default(),
                 1_000,
@@ -1676,6 +1727,7 @@ mod tests {
                     scope: None,
                     nonce: None,
                     request_uri: Some(pushed.request_uri.clone()),
+                    request: None,
                 },
                 1_001,
             )
@@ -1693,6 +1745,7 @@ mod tests {
                     scope: None,
                     nonce: None,
                     request_uri: Some(pushed.request_uri),
+                    request: None,
                 },
                 1_002,
             ),
@@ -1726,6 +1779,7 @@ mod tests {
                     scope: None,
                     nonce: None,
                     request_uri: None,
+                    request: None,
                 },
                 1_000,
             ),
@@ -1743,6 +1797,7 @@ mod tests {
                     scope: None,
                     nonce: None,
                     request_uri: None,
+                    request: None,
                 },
                 &ClientAssertion::default(),
                 1_000,
@@ -1760,6 +1815,7 @@ mod tests {
                     scope: None,
                     nonce: None,
                     request_uri: Some(pushed.request_uri),
+                    request: None,
                 },
                 1_001,
             )
@@ -1931,6 +1987,7 @@ mod tests {
                 scope: Some("read".into()),
                 nonce: None,
                         request_uri: None,
+                        request: None,
         }, 1_000)
             .unwrap();
         p3.code_challenge = pkce::challenge_s256(&v).unwrap();
@@ -2220,6 +2277,7 @@ mod tests {
                     scope: Some("read".into()),
                     nonce: None,
                     request_uri: None,
+                    request: None,
                 },
                 1_000,
             )

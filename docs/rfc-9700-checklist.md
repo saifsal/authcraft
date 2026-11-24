@@ -23,7 +23,7 @@ Educational mapping of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
 | Real resource-owner authentication | done | Argon2id + optional TOTP/WebAuthn 2FA (M5); stub login removed |
 | TLS / production deployment | open | Local demo binds only |
 | Sender-constrained refresh (DPoP) | done | Refresh family stores `jkt` when issued with DPoP |
-| JAR / request objects | open | PAR body only |
+| JAR / request objects | partial | Signed `request` by value at `/authorize` and `/par` (ADR 0015); not required per client |
 
 Profile ADRs: [0005](adr/0005-oauth-code-pkce.md), [0008](adr/0008-token-lifecycle.md),
-[0009](adr/0009-hardening-par-dpop.md), [0014](adr/0014-private-key-jwt.md). Runbook: [oauth-m4.md](oauth-m4.md).
+[0009](adr/0009-hardening-par-dpop.md), [0014](adr/0014-private-key-jwt.md), [0015](adr/0015-jar-request-objects.md). Runbook: [oauth-m4.md](oauth-m4.md).

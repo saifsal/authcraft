@@ -1,0 +1,15 @@
+{
+  "id": "neg-jar-public-client",
+  "source": "generated",
+  "description": "A public client has no registered keys, so its request objects are rejected.",
+  "steps": {
+    "client_id": "spa",
+    "now": 1000,
+    "endpoint": "authorize",
+    "request": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIiLCJ0eXAiOiJvYXV0aC1hdXRoei1yZXErand0In0.eyJpc3MiOiJzcGEiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNsaWVudF9pZCI6InNwYSIsImV4cCI6MTA2MCwicmVzcG9uc2VfdHlwZSI6ImNvZGUiLCJyZWRpcmVjdF91cmkiOiJodHRwczovL3N2Yy5leGFtcGxlL2NiIiwiY29kZV9jaGFsbGVuZ2UiOiJFOU1lbGhvYTJPd3ZGckVNVEpndUNIYW9lSzF0OFVSV2J1R0pTc3R3LWNNIiwiY29kZV9jaGFsbGVuZ2VfbWV0aG9kIjoiUzI1NiIsInN0YXRlIjoic2lnbmVkLXN0YXRlIiwic2NvcGUiOiJyZWFkIn0.WJ9c6MR69Mo75zBTDyTD8mGLAPExf61zkLr0Xh50QYQTPc1RwiGWJ1xkJJHJSPNdrLi9qPK7owUP8c_0YXryAQ"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request_object"
+  }
+}

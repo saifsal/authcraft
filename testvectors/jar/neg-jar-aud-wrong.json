@@ -1,0 +1,15 @@
+{
+  "id": "neg-jar-aud-wrong",
+  "source": "generated",
+  "description": "A request object whose aud is not the AS issuer is rejected.",
+  "steps": {
+    "client_id": "svc",
+    "now": 1000,
+    "endpoint": "authorize",
+    "request": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIiLCJ0eXAiOiJvYXV0aC1hdXRoei1yZXErand0In0.eyJpc3MiOiJzdmMiLCJhdWQiOiJodHRwczovL290aGVyLWFzLmV4YW1wbGUiLCJjbGllbnRfaWQiOiJzdmMiLCJleHAiOjEwNjAsInJlc3BvbnNlX3R5cGUiOiJjb2RlIiwicmVkaXJlY3RfdXJpIjoiaHR0cHM6Ly9zdmMuZXhhbXBsZS9jYiIsImNvZGVfY2hhbGxlbmdlIjoiRTlNZWxob2EyT3d2RnJFTVRKZ3VDSGFvZUsxdDhVUldidUdKU3N0dy1jTSIsImNvZGVfY2hhbGxlbmdlX21ldGhvZCI6IlMyNTYiLCJzdGF0ZSI6InNpZ25lZC1zdGF0ZSIsInNjb3BlIjoicmVhZCJ9.icR8RML1YHjqppO8XeT7p5konMabrcGZzEta9heQe2MgfC5Gj-6tWx8KxJzWGJtBZlSyPYVg8xWL9GeH47yCDg"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request_object"
+  }
+}

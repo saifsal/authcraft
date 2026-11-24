@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://authcraft.local/testvectors/jar/schema.json",
+  "title": "authcraft RFC 9101 request object vector (ADR 0015)",
+  "type": "object",
+  "required": [
+    "id",
+    "source",
+    "description",
+    "steps",
+    "expect"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "steps": {
+      "type": "object",
+      "required": [
+        "client_id",
+        "now",
+        "endpoint",
+        "request"
+      ],
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "now": {
+          "type": "integer"
+        },
+        "endpoint": {
+          "enum": [
+            "authorize",
+            "par"
+          ]
+        },
+        "request": {
+          "type": "string",
+          "description": "Compact request object signed with the RFC 8037 A.2 key (kid rfc8037-a2)."
+        },
+        "outer": {
+          "type": "object",
+          "description": "Unsigned authorize/PAR parameters sent beside request (request_uri, redirect_uri, state, ...)."
+        },
+        "client_assertion_type": {
+          "type": "string"
+        },
+        "client_assertion": {
+          "type": "string"
+        }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "required": [
+        "ok"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "enum": [
+            "invalid_request",
+            "invalid_request_object",
+            "invalid_client",
+            "unauthorized_client"
+          ]
+        },
+        "redirect_uri": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "code_challenge": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "x-authcraft-server": "Same issuer and clients as testvectors/client_auth/schema.json (spa public, svc private_key_jwt)."
+}

@@ -414,6 +414,8 @@ pub struct AuthorizeQuery {
     pub scope: Option<String>,
     pub nonce: Option<String>,
     pub request_uri: Option<String>,
+    /// RFC 9101 request object (ADR 0015).
+    pub request: Option<String>,
 }
 
 async fn authorize(
@@ -430,6 +432,7 @@ async fn authorize(
         scope: q.scope,
         nonce: q.nonce,
         request_uri: q.request_uri,
+        request: q.request,
     };
 
     match state.server.begin_authorize(&req, now_unix()) {
@@ -470,6 +473,8 @@ pub struct ParForm {
     pub state: Option<String>,
     pub scope: Option<String>,
     pub nonce: Option<String>,
+    /// RFC 9101 request object (ADR 0015).
+    pub request: Option<String>,
     pub client_assertion_type: Option<String>,
     pub client_assertion: Option<String>,
 }
@@ -525,6 +530,7 @@ async fn par(State(state): State<AppState>, Form(form): Form<ParForm>) -> Respon
         scope: form.scope,
         nonce: form.nonce,
         request_uri: None,
+        request: form.request,
     };
     let client_auth = ClientAssertion {
         client_assertion_type: form.client_assertion_type,
@@ -1244,7 +1250,9 @@ async fn token(
 
 fn token_error(err: OAuthError) -> Response {
     let status = match err {
-        OAuthError::InvalidRequest | OAuthError::UnsupportedGrantType => StatusCode::BAD_REQUEST,
+        OAuthError::InvalidRequest
+        | OAuthError::UnsupportedGrantType
+        | OAuthError::InvalidRequestObject => StatusCode::BAD_REQUEST,
         OAuthError::UnauthorizedClient | OAuthError::InvalidClient | OAuthError::InvalidToken => {
             StatusCode::UNAUTHORIZED
         }

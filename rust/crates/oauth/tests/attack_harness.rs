@@ -42,6 +42,7 @@ fn authorize_and_finish(srv: &AuthorizationServer, challenge: &str, subject: &st
                 scope: Some("read".into()),
                 nonce: None,
                 request_uri: None,
+                request: None,
             },
             1_000,
         )
@@ -66,6 +67,7 @@ fn attack_pkce_plain_downgrade() {
                 scope: None,
                 nonce: None,
                 request_uri: None,
+                request: None,
             },
             1_000,
         )
@@ -88,6 +90,7 @@ fn attack_open_redirect_via_unregistered_uri() {
                 scope: None,
                 nonce: None,
                 request_uri: None,
+                request: None,
             },
             1_000,
         )
@@ -158,6 +161,7 @@ fn attack_oidc_missing_nonce() {
                 scope: Some("openid".into()),
                 nonce: None,
                 request_uri: None,
+                request: None,
             },
             1_000,
         )
@@ -477,6 +481,7 @@ fn authorize_success_includes_iss() {
                 scope: None,
                 nonce: None,
                 request_uri: None,
+                request: None,
             },
             1_000,
         )

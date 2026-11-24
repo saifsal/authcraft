@@ -1,0 +1,18 @@
+{
+  "id": "neg-jar-with-request-uri",
+  "source": "generated",
+  "description": "Sending both request and request_uri is invalid_request.",
+  "steps": {
+    "client_id": "svc",
+    "now": 1000,
+    "endpoint": "authorize",
+    "request": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIiLCJ0eXAiOiJvYXV0aC1hdXRoei1yZXErand0In0.eyJpc3MiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNsaWVudF9pZCI6InN2YyIsImV4cCI6MTA2MCwicmVzcG9uc2VfdHlwZSI6ImNvZGUiLCJyZWRpcmVjdF91cmkiOiJodHRwczovL3N2Yy5leGFtcGxlL2NiIiwiY29kZV9jaGFsbGVuZ2UiOiJFOU1lbGhvYTJPd3ZGckVNVEpndUNIYW9lSzF0OFVSV2J1R0pTc3R3LWNNIiwiY29kZV9jaGFsbGVuZ2VfbWV0aG9kIjoiUzI1NiIsInN0YXRlIjoic2lnbmVkLXN0YXRlIiwic2NvcGUiOiJyZWFkIn0.B3_Swc10x1aJkaj_v41KCDw-K5oZZQQ5w8LyXORJ5yCskAjIfgo7u9GikR6gJ5m19haESd7RsIN5s4uIXnJYBw",
+    "outer": {
+      "request_uri": "urn:ietf:params:oauth:request_uri:x"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

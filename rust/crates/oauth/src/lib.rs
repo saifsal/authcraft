@@ -16,6 +16,7 @@ pub mod keyring;
 pub mod par;
 pub mod pkce;
 pub mod refresh;
+pub mod request_object;
 pub mod scim;
 pub mod server;
 pub mod token;

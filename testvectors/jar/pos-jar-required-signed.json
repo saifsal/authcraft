@@ -1,0 +1,17 @@
+{
+  "id": "pos-jar-required-signed",
+  "source": "generated",
+  "description": "A client registered with require_signed_request_object authorizes with a signed request object.",
+  "steps": {
+    "client_id": "svc-strict",
+    "now": 1000,
+    "endpoint": "authorize",
+    "request": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIiLCJ0eXAiOiJvYXV0aC1hdXRoei1yZXErand0In0.eyJpc3MiOiJzdmMtc3RyaWN0IiwiYXVkIjoiaHR0cHM6Ly9hdXRoLmV4YW1wbGUiLCJjbGllbnRfaWQiOiJzdmMtc3RyaWN0IiwiZXhwIjoxMDYwLCJyZXNwb25zZV90eXBlIjoiY29kZSIsInJlZGlyZWN0X3VyaSI6Imh0dHBzOi8vc3ZjLmV4YW1wbGUvY2IiLCJjb2RlX2NoYWxsZW5nZSI6IkU5TWVsaG9hMk93dkZyRU1USmd1Q0hhb2VLMXQ4VVJXYnVHSlNzdHctY00iLCJjb2RlX2NoYWxsZW5nZV9tZXRob2QiOiJTMjU2Iiwic3RhdGUiOiJzaWduZWQtc3RhdGUiLCJzY29wZSI6InJlYWQifQ.Ps_8TYKCHbrr7SZAcgNeRqJWtGCp6NK2Vyz-qAwf1Tw8jVJBwO2rNbq6rhi1ua_m9oO5cLcsEbFxdQR7LAwbDw"
+  },
+  "expect": {
+    "ok": true,
+    "redirect_uri": "https://svc.example/cb",
+    "state": "signed-state",
+    "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+  }
+}

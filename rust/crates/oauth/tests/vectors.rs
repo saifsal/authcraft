@@ -879,6 +879,7 @@ fn run_admin_vector(path: &Path) {
                     redirect_uris: vec![redirect_uri.into()],
                     client_name: optional_string(steps, "client_name").map(str::to_owned),
                     token_endpoint_auth: Default::default(),
+                    require_signed_request_object: false,
                 },
             )
             .unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -963,6 +964,7 @@ fn run_dcr_vector(path: &Path) {
                 token_endpoint_auth_method: optional_string(steps, "token_endpoint_auth_method")
                     .map(str::to_owned),
                 jwks: optional_string(steps, "jwks").map(str::to_owned),
+                require_signed_request_object: bool_field(steps, "require_signed_request_object"),
             });
             if bool_field(expect, "ok") {
                 result.unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -979,6 +981,7 @@ fn run_dcr_vector(path: &Path) {
                     client_name: optional_string(steps, "client_name").map(str::to_owned),
                     token_endpoint_auth_method: Some("none".into()),
                     jwks: None,
+                    require_signed_request_object: false,
                 })
                 .unwrap_or_else(|e| panic!("{case}: {e}"));
             let client_id = &reg.client_id;
@@ -1041,8 +1044,8 @@ fn dcr_shared_vectors() {
 /// Client JWKS for `svc` in `testvectors/client_auth/schema.json` (RFC 8037 A.2 public key).
 const CLIENT_AUTH_SVC_JWKS: &str = r#"{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"rfc8037-a2","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#;
 
-/// Server for `testvectors/client_auth/` and `testvectors/jar/`: public `spa`
-/// and `private_key_jwt` `svc`.
+/// Server for `testvectors/client_auth/` and `testvectors/jar/`: public `spa`,
+/// `private_key_jwt` `svc`, and `svc-strict` (also requires signed request objects).
 fn make_confidential_server() -> AuthorizationServer {
     AuthorizationServer::new(
         ServerConfig::new("https://auth.example", "api"),
@@ -1053,6 +1056,14 @@ fn make_confidential_server() -> AuthorizationServer {
                 vec!["https://svc.example/cb".into()],
                 CLIENT_AUTH_SVC_JWKS,
             ),
+            Client {
+                require_signed_request_object: true,
+                ..Client::private_key_jwt(
+                    "svc-strict",
+                    vec!["https://svc.example/cb".into()],
+                    CLIENT_AUTH_SVC_JWKS,
+                )
+            },
         ],
         generate_signing_key(Alg::EdDSA).expect("key"),
     )
@@ -1209,7 +1220,7 @@ fn run_jar_vector(path: &Path) {
         scope: outer_str("scope"),
         nonce: outer_str("nonce"),
         request_uri: outer_str("request_uri"),
-        request: Some(string(steps, "request").into()),
+        request: optional_string(steps, "request").map(str::to_owned),
     };
     let result = match string(steps, "endpoint") {
         "authorize" => srv.begin_authorize(&req, now),

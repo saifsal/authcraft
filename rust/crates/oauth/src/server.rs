@@ -103,6 +103,8 @@ pub struct DynamicClientRequest {
     pub token_endpoint_auth_method: Option<String>,
     /// Inline public JWKS document; required for `private_key_jwt` only.
     pub jwks: Option<String>,
+    /// RFC 9101 §10.5; requires `private_key_jwt` (ADR 0015 B2).
+    pub require_signed_request_object: bool,
 }
 
 /// RFC 7591 registration response fields.
@@ -112,6 +114,7 @@ pub struct DynamicClientSuccess {
     pub redirect_uris: Vec<String>,
     pub client_name: Option<String>,
     pub token_endpoint_auth_method: &'static str,
+    pub require_signed_request_object: bool,
 }
 
 /// Validated authorize request awaiting resource-owner authentication.
@@ -419,7 +422,8 @@ impl AuthorizationServer {
 
     fn validate_client_metadata(client: &Client) -> bool {
         match &client.token_endpoint_auth {
-            TokenEndpointAuth::None => true,
+            // A public client has no keys to sign request objects with.
+            TokenEndpointAuth::None => !client.require_signed_request_object,
             TokenEndpointAuth::PrivateKeyJwt { jwks } => client_auth::parse_client_jwks(jwks).is_ok(),
         }
     }
@@ -796,7 +800,11 @@ impl AuthorizationServer {
             redirect_uris: req.redirect_uris.clone(),
             client_name: req.client_name.clone(),
             token_endpoint_auth,
+            require_signed_request_object: req.require_signed_request_object,
         };
+        if !Self::validate_client_metadata(&client) {
+            return Err(OAuthError::InvalidRequest);
+        }
         if !self.clients.lock().expect("clients lock").insert(client) {
             return Err(OAuthError::ServerError);
         }
@@ -805,6 +813,7 @@ impl AuthorizationServer {
             redirect_uris: req.redirect_uris.clone(),
             client_name: req.client_name.clone(),
             token_endpoint_auth_method,
+            require_signed_request_object: req.require_signed_request_object,
         })
     }
 
@@ -900,6 +909,19 @@ impl AuthorizationServer {
         Ok((Some(verified.jkt), Some(next)))
     }
 
+    /// Rejects plain (unsigned) authorize parameters for a client registered
+    /// with `require_signed_request_object` (ADR 0015 B2). Unknown clients pass
+    /// here and fail later in [`Self::validate_authorize_params`].
+    fn check_signed_request_required(&self, req: &AuthorizeRequest) -> Result<(), OAuthError> {
+        if req.request.is_some() {
+            return Ok(());
+        }
+        match self.lookup_client(&req.client_id) {
+            Ok(client) if client.require_signed_request_object => Err(OAuthError::InvalidRequest),
+            _ => Ok(()),
+        }
+    }
+
     /// Replaces authorize parameters with the claims of a verified RFC 9101
     /// request object (ADR 0015). Without `request`, returns `req` unchanged.
     fn expand_request_object(
@@ -958,6 +980,7 @@ impl AuthorizationServer {
         if req.request_uri.is_some() {
             return Err(OAuthError::InvalidRequest);
         }
+        self.check_signed_request_required(req)?;
         let req = &self.expand_request_object(req, now)?;
         let pending = self.validate_authorize_params(req)?;
         let record = ParRecord {
@@ -1012,6 +1035,7 @@ impl AuthorizationServer {
         if self.config.require_par {
             return Err(OAuthError::InvalidRequest);
         }
+        self.check_signed_request_required(req)?;
         let req = self.expand_request_object(req, now)?;
         self.validate_authorize_params(&req)
     }
@@ -2351,6 +2375,7 @@ mod tests {
                 client_name: None,
                 token_endpoint_auth_method: Some("private_key_jwt".into()),
                 jwks: Some(jwks.clone()),
+                require_signed_request_object: false,
             })
             .unwrap();
         assert_eq!(ok.token_endpoint_auth_method, "private_key_jwt");
@@ -2360,6 +2385,7 @@ mod tests {
                 client_name: None,
                 token_endpoint_auth_method: None,
                 jwks: Some(jwks),
+                require_signed_request_object: false,
             }),
             Err(OAuthError::InvalidRequest)
         );

@@ -30,6 +30,9 @@ pub struct Client {
     pub redirect_uris: Vec<String>,
     pub client_name: Option<String>,
     pub token_endpoint_auth: TokenEndpointAuth,
+    /// RFC 9101 §10.5: authorize parameters must arrive in a signed request
+    /// object (ADR 0015 B2). Only valid for `private_key_jwt` clients.
+    pub require_signed_request_object: bool,
 }
 
 impl Client {
@@ -40,6 +43,7 @@ impl Client {
             redirect_uris,
             client_name: None,
             token_endpoint_auth: TokenEndpointAuth::None,
+            require_signed_request_object: false,
         }
     }
 

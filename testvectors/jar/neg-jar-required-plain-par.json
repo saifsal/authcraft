@@ -1,0 +1,24 @@
+{
+  "id": "neg-jar-required-plain-par",
+  "source": "generated",
+  "description": "A require_signed_request_object client pushing plain parameters to /par gets invalid_request, even when authenticated.",
+  "steps": {
+    "client_id": "svc-strict",
+    "now": 1000,
+    "endpoint": "par",
+    "outer": {
+      "response_type": "code",
+      "redirect_uri": "https://svc.example/cb",
+      "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+      "code_challenge_method": "S256",
+      "state": "plain-state",
+      "scope": "read"
+    },
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJzdmMtc3RyaWN0Iiwic3ViIjoic3ZjLXN0cmljdCIsImF1ZCI6Imh0dHBzOi8vYXV0aC5leGFtcGxlIiwianRpIjoiY2Etc3RyaWN0IiwiZXhwIjoxMDYxfQ.plPjp9YLaR_WEqM7zD2Slbk1QkwyfNVvyxQ8jyqlMqUfS0-DV82bRX_LQL_cF9JEG0K9_1RL_bdFovVrbQrbBQ"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

@@ -1,6 +1,6 @@
 # ADR 0015: JWT-secured authorization requests (JAR)
 
-- **Status:** Accepted
+- **Status:** Accepted (amended as slices land)
 - **Date:** 2026-11-24
 
 ## Context
@@ -40,16 +40,32 @@ clients a registered JWKS, which is the key material a request object needs.
 7. Shared vectors: `testvectors/jar/`, signed with the RFC 8037 Appendix A.2
    key registered for client `svc`.
 
+## Amendments
+
+### B2 — Per-client `require_signed_request_object` (RFC 9101 §10.5)
+
+1. `Client.require_signed_request_object` (default `false`). When true, plain
+   authorize parameters are `invalid_request` at both `/authorize` and `/par`;
+   only a `request` object (or a `request_uri` from PAR, which for such a
+   client can only have come from a request object) is accepted.
+2. Only `private_key_jwt` clients may set it. Registration (`POST /register`,
+   `POST /admin/clients`) with the flag on a public client is
+   `invalid_request`. Responses echo `require_signed_request_object`.
+3. At `/par`, client authentication still runs first, so an unauthenticated
+   push is `invalid_client` before the signed-request check.
+4. Vectors: `svc-strict` cases in `testvectors/jar/`; registration cases in
+   `testvectors/dcr/`.
+
 ## Not in this slice
 
 - `request_uri` pointing at a client-hosted URL (only PAR URNs are accepted).
 - Encrypted request objects (JWE).
-- Per-client `require_signed_request_object` (RFC 9101 §10.5).
 - `jti` replay tracking for request objects. A replayed object only restarts
   a flow bound to the original PKCE challenge.
 
 ## Consequences
 
-- RFC 9700 / OpenID checklist JAR rows move from open to partial.
+- RFC 9700 / OpenID checklist JAR rows move from open to partial; B2 lets an
+  operator make JAR mandatory per client.
 - `AuthorizeRequest` gains `request`; `OAuthError` gains
   `InvalidRequestObject`.

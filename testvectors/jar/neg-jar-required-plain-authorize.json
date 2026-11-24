@@ -1,0 +1,22 @@
+{
+  "id": "neg-jar-required-plain-authorize",
+  "source": "generated",
+  "description": "A require_signed_request_object client sending plain authorize parameters gets invalid_request.",
+  "steps": {
+    "client_id": "svc-strict",
+    "now": 1000,
+    "endpoint": "authorize",
+    "outer": {
+      "response_type": "code",
+      "redirect_uri": "https://svc.example/cb",
+      "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+      "code_challenge_method": "S256",
+      "state": "plain-state",
+      "scope": "read"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

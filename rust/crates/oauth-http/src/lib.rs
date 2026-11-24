@@ -254,6 +254,7 @@ async fn admin_list_clients(State(state): State<AppState>, headers: HeaderMap) -
                         "redirect_uris": c.redirect_uris,
                         "client_name": c.client_name,
                         "token_endpoint_auth_method": c.token_endpoint_auth.method(),
+                        "require_signed_request_object": c.require_signed_request_object,
                     })
                 })
                 .collect();
@@ -277,6 +278,9 @@ pub struct AdminCreateClientBody {
     pub token_endpoint_auth_method: Option<String>,
     /// Public JWKS object; required for `private_key_jwt`.
     pub jwks: Option<serde_json::Value>,
+    /// RFC 9101 §10.5 (ADR 0015 B2).
+    #[serde(default)]
+    pub require_signed_request_object: bool,
 }
 
 /// Maps RFC 7591 `token_endpoint_auth_method` + `jwks` to the client model.
@@ -312,6 +316,7 @@ async fn admin_create_client(
         redirect_uris: body.redirect_uris,
         client_name: body.client_name,
         token_endpoint_auth,
+        require_signed_request_object: body.require_signed_request_object,
     };
     match state.server.create_client(admin_bearer(&headers), client) {
         Ok(c) => (
@@ -321,6 +326,7 @@ async fn admin_create_client(
                 "redirect_uris": c.redirect_uris,
                 "client_name": c.client_name,
                 "token_endpoint_auth_method": c.token_endpoint_auth.method(),
+                "require_signed_request_object": c.require_signed_request_object,
             })),
         )
             .into_response(),
@@ -486,6 +492,9 @@ pub struct RegisterClientBody {
     pub token_endpoint_auth_method: Option<String>,
     /// Inline public JWKS object for `private_key_jwt` (ADR 0014).
     pub jwks: Option<serde_json::Value>,
+    /// RFC 9101 §10.5 (ADR 0015 B2).
+    #[serde(default)]
+    pub require_signed_request_object: bool,
 }
 
 async fn register_client(
@@ -497,6 +506,7 @@ async fn register_client(
         client_name: body.client_name,
         token_endpoint_auth_method: body.token_endpoint_auth_method,
         jwks: body.jwks.map(|v| v.to_string()),
+        require_signed_request_object: body.require_signed_request_object,
     };
     match state.server.register_client(&req) {
         Ok(ok) => (
@@ -506,6 +516,7 @@ async fn register_client(
                 "redirect_uris": ok.redirect_uris,
                 "client_name": ok.client_name,
                 "token_endpoint_auth_method": ok.token_endpoint_auth_method,
+                "require_signed_request_object": ok.require_signed_request_object,
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
             })),

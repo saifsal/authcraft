@@ -211,7 +211,7 @@ Local tooling:
 
 ## Gotchas
 
-- The tree is the source of truth for what runs. M1 OAuth is Rust-only so far (`oauth` + `oauth-http`); there is no Zig/Go OAuth harness yet. Rust, Zig, and Go JOSE verifiers agree on the shared JOSE vectors; the Go harness differentially checks Go against `jose-cli`.
+- The tree is the source of truth for what runs. M1 OAuth is Rust-only so far (`oauth` + `oauth-http`); there is no Zig/Go OAuth harness yet. Rust, Zig, and Go JOSE verifiers agree on the shared JOSE vectors; the Go harness differentially checks Go against `jose-cli`. `go/harness/oauth_jwt_test.go` re-verifies the JWTs in `testvectors/client_auth/`, `jar/`, and `introspect/` at the JWT layer only; its `jwtVerdicts` table must classify every vector file in those directories.
 - `testvectors/generated/` holds the ADR 0003 minimum negative vector set and positive time-boundary cases. `testvectors/rfc/` holds compact examples copied from RFC 7515 and RFC 8037. They are run against Rust (`tests/vectors.rs`), Zig (`zig/src/vectors.zig`), and Go (`go/harness`). The examples whose headers have no `kid` expect `key_not_found`; their signature bytes are checked by `rfc_signatures_match_when_kid_is_absent` in each language. `testvectors/oauth/` is the M1 contract and `testvectors/oidc/` is the M2 contract for the Rust `oauth` crate (ADR 0005 / ADR 0006). Unit tests are not a substitute for those suites; `docs/rfc-conformance.md` says so.
 - `cargo test` does start the `oauth-http` e2e harness in-process; `cargo run -p oauth-http` is the interactive demo. There is still no production deployment.
 - `docs/threat-model.md` is not in the repository.

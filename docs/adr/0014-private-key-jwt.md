@@ -48,7 +48,9 @@ any client secret.
    `token_endpoint_auth_signing_alg_values_supported: ["EdDSA","ES256"]`.
 8. Shared vectors: `testvectors/client_auth/` (assertions signed with the
    published RFC 8037 Appendix A.2 Ed25519 key) and `private_key_jwt` cases in
-   `testvectors/dcr/`.
+   `testvectors/dcr/`. Rust runs the full flows; `go/harness`
+   (`oauth_jwt_test.go`) re-checks every assertion against a Go port of the
+   JWT-layer rules.
 
 ## Amendments
 

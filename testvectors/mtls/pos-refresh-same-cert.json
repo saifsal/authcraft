@@ -1,0 +1,20 @@
+{
+  "id": "pos-refresh-same-cert",
+  "source": "generated",
+  "description": "Refreshing a certificate-bound family with the same certificate succeeds and stays bound.",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "token_cert": "B",
+    "refresh_cert": "B"
+  },
+  "expect": {
+    "ok": true,
+    "token_type": "Bearer",
+    "cnf_x5t": "B"
+  }
+}

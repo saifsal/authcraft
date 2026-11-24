@@ -15,6 +15,7 @@ use crate::client_auth::{self, ClientAssertionJtiCache, CLIENT_ASSERTION_TYPE_JW
 use crate::code::{AuthorizationCode, CodeStore, DEFAULT_CODE_TTL_SECS};
 use crate::denylist::JtiDenylist;
 use crate::dpop::{self, DpopJtiCache};
+use crate::mtls;
 use crate::error::OAuthError;
 use crate::id_token::{self, IdTokenClaims};
 use crate::keyring::{Keyring, DEFAULT_VERIFY_GRACE_SECS};
@@ -190,13 +191,17 @@ pub struct AuthorizeRequest {
     pub request: Option<String>,
 }
 
-/// RFC 7523 client assertion parameters sent to a back-channel endpoint
-/// (`/par`, `/revoke`) by a `private_key_jwt` client (ADR 0014). Public
-/// clients leave both fields `None`.
+/// Client credentials presented to a back-channel endpoint (`/par`,
+/// `/revoke`, `/introspect`): an RFC 7523 assertion for `private_key_jwt`
+/// clients (ADR 0014) and/or the TLS client certificate for
+/// `self_signed_tls_client_auth` (ADR 0017). Public clients leave the
+/// assertion fields `None`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ClientAssertion {
+pub struct ClientCredentials {
     pub client_assertion_type: Option<String>,
     pub client_assertion: Option<String>,
+    /// DER bytes of the TLS client leaf certificate, if the connection had one.
+    pub tls_client_cert: Option<Vec<u8>>,
 }
 
 /// Token form parameters.
@@ -391,10 +396,24 @@ impl AuthorizationServer {
         client_id: &str,
         assertion_type: Option<&str>,
         assertion: Option<&str>,
+        tls_client_cert: Option<&[u8]>,
         now: i64,
     ) -> Result<Client, OAuthError> {
         let client = self.lookup_client(client_id)?;
         match &client.token_endpoint_auth {
+            TokenEndpointAuth::SelfSignedTlsClientAuth { cert_thumbprints } => {
+                // RFC 8705 §2.2: the certificate is the credential; mixing in
+                // an assertion is ambiguous and refused.
+                if assertion_type.is_some() || assertion.is_some() {
+                    return Err(OAuthError::InvalidClient);
+                }
+                let presented = tls_client_cert
+                    .map(mtls::cert_thumbprint)
+                    .ok_or(OAuthError::InvalidClient)?;
+                if !cert_thumbprints.contains(&presented) {
+                    return Err(OAuthError::InvalidClient);
+                }
+            }
             TokenEndpointAuth::None => {
                 if assertion_type.is_some() || assertion.is_some() {
                     return Err(OAuthError::InvalidClient);
@@ -427,6 +446,10 @@ impl AuthorizationServer {
 
     fn validate_client_metadata(client: &Client) -> bool {
         match &client.token_endpoint_auth {
+            // Request objects are verified with a signing JWKS (ADR 0015).
+            TokenEndpointAuth::SelfSignedTlsClientAuth { cert_thumbprints } => {
+                !cert_thumbprints.is_empty() && !client.require_signed_request_object
+            }
             // A public client has no keys to sign request objects with and
             // cannot authenticate to the introspection endpoint.
             TokenEndpointAuth::None => {
@@ -774,7 +797,7 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"request_parameter_supported":true,"request_uri_parameter_supported":false,"request_object_signing_alg_values_supported":["EdDSA","ES256"],"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"revocation_endpoint_auth_methods_supported":["none","private_key_jwt"],"introspection_endpoint_auth_methods_supported":["private_key_jwt"],"scopes_supported":["openid","profile","email"]}}"#,
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"request_parameter_supported":true,"request_uri_parameter_supported":false,"request_object_signing_alg_values_supported":["EdDSA","ES256"],"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"revocation_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth"],"introspection_endpoint_auth_methods_supported":["private_key_jwt","self_signed_tls_client_auth"],"tls_client_certificate_bound_access_tokens":true,"scopes_supported":["openid","profile","email"]}}"#,
             require_par = if self.config.require_par {
                 "true"
             } else {
@@ -799,6 +822,11 @@ impl AuthorizationServer {
             (Some("private_key_jwt"), Some(jwks)) => {
                 client_auth::parse_client_jwks(jwks)?;
                 TokenEndpointAuth::PrivateKeyJwt { jwks: jwks.clone() }
+            }
+            (Some("self_signed_tls_client_auth"), Some(jwks)) => {
+                TokenEndpointAuth::SelfSignedTlsClientAuth {
+                    cert_thumbprints: mtls::thumbprints_from_jwks(jwks)?,
+                }
             }
             _ => return Err(OAuthError::InvalidRequest),
         };
@@ -876,6 +904,7 @@ impl AuthorizationServer {
         name: Option<&str>,
         email: Option<&str>,
         cnf_jkt: Option<&str>,
+        cnf_x5t_s256: Option<&str>,
         now: i64,
     ) -> Result<(String, i64), OAuthError> {
         let exp = now.saturating_add(self.config.access_token_ttl_secs);
@@ -895,6 +924,7 @@ impl AuthorizationServer {
                 name,
                 email,
                 cnf_jkt,
+                cnf_x5t_s256,
                 iat: now,
                 exp,
             },
@@ -979,13 +1009,14 @@ impl AuthorizationServer {
     pub fn push_authorization(
         &self,
         req: &AuthorizeRequest,
-        client_auth: &ClientAssertion,
+        client_auth: &ClientCredentials,
         now: i64,
     ) -> Result<ParSuccess, OAuthError> {
         self.authenticate_client(
             &req.client_id,
             client_auth.client_assertion_type.as_deref(),
             client_auth.client_assertion.as_deref(),
+            client_auth.tls_client_cert.as_deref(),
             now,
         )?;
         if req.request_uri.is_some() {
@@ -1130,11 +1161,32 @@ impl AuthorizationServer {
         dpop_proof: Option<&str>,
         token_htu: &str,
     ) -> Result<TokenSuccess, OAuthError> {
+        self.exchange_token_tls(req, now, dpop_proof, token_htu, None)
+    }
+
+    /// [`Self::exchange_token`] over a TLS connection that may carry a client
+    /// certificate (RFC 8705, ADR 0017). The certificate authenticates
+    /// `self_signed_tls_client_auth` clients and, when no DPoP proof is sent,
+    /// binds the access token (`cnf.x5t#S256`) and refresh family to it.
+    pub fn exchange_token_tls(
+        &self,
+        req: &TokenRequest,
+        now: i64,
+        dpop_proof: Option<&str>,
+        token_htu: &str,
+        tls_client_cert: Option<&[u8]>,
+    ) -> Result<TokenSuccess, OAuthError> {
         match req.grant_type.as_str() {
-            "authorization_code" => {
-                self.exchange_authorization_code(req, now, dpop_proof, token_htu)
+            "authorization_code" => self.exchange_authorization_code(
+                req,
+                now,
+                dpop_proof,
+                token_htu,
+                tls_client_cert,
+            ),
+            "refresh_token" => {
+                self.exchange_refresh_token(req, now, dpop_proof, token_htu, tls_client_cert)
             }
-            "refresh_token" => self.exchange_refresh_token(req, now, dpop_proof, token_htu),
             _ => Err(OAuthError::UnsupportedGrantType),
         }
     }
@@ -1145,11 +1197,13 @@ impl AuthorizationServer {
         now: i64,
         dpop_proof: Option<&str>,
         token_htu: &str,
+        tls_client_cert: Option<&[u8]>,
     ) -> Result<TokenSuccess, OAuthError> {
         self.authenticate_client(
             &req.client_id,
             req.client_assertion_type.as_deref(),
             req.client_assertion.as_deref(),
+            tls_client_cert,
             now,
         )?;
 
@@ -1157,6 +1211,12 @@ impl AuthorizationServer {
         // does not consume the authorization code.
         let (jkt, dpop_nonce) = self.resolve_dpop(dpop_proof, token_htu, now)?;
         let token_type = if jkt.is_some() { "DPoP" } else { "Bearer" };
+        // RFC 8705 §3: bind to the TLS certificate unless DPoP already binds.
+        let x5t = if jkt.is_none() {
+            tls_client_cert.map(mtls::cert_thumbprint)
+        } else {
+            None
+        };
 
         let mut store = self.codes.lock().map_err(|_| OAuthError::ServerError)?;
         let record = store.redeem(&req.code, now)?;
@@ -1174,6 +1234,7 @@ impl AuthorizationServer {
             record.name.as_deref(),
             record.email.as_deref(),
             jkt.as_deref(),
+            x5t.as_deref(),
             now,
         )?;
 
@@ -1211,6 +1272,7 @@ impl AuthorizationServer {
             record.email.clone(),
             refresh_exp,
             jkt.clone(),
+            x5t,
         )?;
 
         Ok(TokenSuccess {
@@ -1229,11 +1291,13 @@ impl AuthorizationServer {
         now: i64,
         dpop_proof: Option<&str>,
         token_htu: &str,
+        tls_client_cert: Option<&[u8]>,
     ) -> Result<TokenSuccess, OAuthError> {
         self.authenticate_client(
             &req.client_id,
             req.client_assertion_type.as_deref(),
             req.client_assertion.as_deref(),
+            tls_client_cert,
             now,
         )?;
         if req.refresh_token.is_empty() {
@@ -1242,12 +1306,19 @@ impl AuthorizationServer {
 
         // Verify DPoP against the bound jkt before rotate so a failed proof
         // does not consume the presented refresh token.
-        let bound_jkt = {
+        let (bound_jkt, bound_x5t) = {
             let store = self.refresh.lock().map_err(|_| OAuthError::ServerError)?;
             store
                 .get_active(&req.refresh_token)
-                .and_then(|r| r.dpop_jkt.clone())
+                .map(|r| (r.dpop_jkt.clone(), r.mtls_x5t.clone()))
+                .unwrap_or_default()
         };
+        let presented_x5t = tls_client_cert.map(mtls::cert_thumbprint);
+        if let Some(bound) = bound_x5t.as_deref() {
+            if presented_x5t.as_deref() != Some(bound) {
+                return Err(OAuthError::InvalidGrant);
+            }
+        }
         let (jkt, dpop_nonce) = self.resolve_dpop(dpop_proof, token_htu, now)?;
         if let Some(bound) = bound_jkt.as_deref() {
             match jkt.as_deref() {
@@ -1263,6 +1334,7 @@ impl AuthorizationServer {
         drop(store);
 
         let token_type = if jkt.is_some() { "DPoP" } else { "Bearer" };
+        let x5t = if jkt.is_none() { presented_x5t } else { None };
 
         let (access_token, _) = self.mint_access(
             &record.subject,
@@ -1271,6 +1343,7 @@ impl AuthorizationServer {
             record.name.as_deref(),
             record.email.as_deref(),
             jkt.as_deref(),
+            x5t.as_deref(),
             now,
         )?;
 
@@ -1294,7 +1367,29 @@ impl AuthorizationServer {
         dpop_proof: Option<&str>,
         userinfo_htu: &str,
     ) -> Result<UserInfo, OAuthError> {
+        self.userinfo_tls(access_token, now, dpop_proof, userinfo_htu, None)
+    }
+
+    /// [`Self::userinfo`] with the caller's TLS client certificate. A token
+    /// with `cnf.x5t#S256` requires the matching certificate (RFC 8705 §3).
+    pub fn userinfo_tls(
+        &self,
+        access_token: &str,
+        now: i64,
+        dpop_proof: Option<&str>,
+        userinfo_htu: &str,
+        tls_client_cert: Option<&[u8]>,
+    ) -> Result<UserInfo, OAuthError> {
         let claims = self.verify_access_claims(access_token, now)?;
+        if let Some(x5t) = claims
+            .get("cnf")
+            .and_then(|c| c.get("x5t#S256"))
+            .and_then(|v| v.as_str())
+        {
+            if tls_client_cert.map(mtls::cert_thumbprint).as_deref() != Some(x5t) {
+                return Err(OAuthError::InvalidToken);
+            }
+        }
         if let Some(jkt) = claims
             .get("cnf")
             .and_then(|c| c.get("jkt"))
@@ -1340,7 +1435,7 @@ impl AuthorizationServer {
         token: &str,
         hint: TokenTypeHint,
         client_id: &str,
-        client_auth: &ClientAssertion,
+        client_auth: &ClientCredentials,
         now: i64,
     ) -> Result<(), OAuthError> {
         // RFC 7009 §2.1: confidential clients authenticate (ADR 0014).
@@ -1348,6 +1443,7 @@ impl AuthorizationServer {
             client_id,
             client_auth.client_assertion_type.as_deref(),
             client_auth.client_assertion.as_deref(),
+            client_auth.tls_client_cert.as_deref(),
             now,
         )?;
         if token.is_empty() {
@@ -1398,13 +1494,14 @@ impl AuthorizationServer {
         token: &str,
         hint: TokenTypeHint,
         caller_client_id: &str,
-        client_auth: &ClientAssertion,
+        client_auth: &ClientCredentials,
         now: i64,
     ) -> Result<Introspection, OAuthError> {
         let caller = self.authenticate_client(
             caller_client_id,
             client_auth.client_assertion_type.as_deref(),
             client_auth.client_assertion.as_deref(),
+            client_auth.tls_client_cert.as_deref(),
             now,
         )?;
         if caller.token_endpoint_auth == TokenEndpointAuth::None {
@@ -1778,7 +1875,7 @@ mod tests {
                     request_uri: None,
                     request: None,
                 },
-                &ClientAssertion::default(),
+                &ClientCredentials::default(),
                 1_000,
             )
             .unwrap();
@@ -1867,7 +1964,7 @@ mod tests {
                     request_uri: None,
                     request: None,
                 },
-                &ClientAssertion::default(),
+                &ClientCredentials::default(),
                 1_000,
             )
             .unwrap();
@@ -1945,7 +2042,7 @@ mod tests {
         srv.revoke(
             &tok.access_token,
             TokenTypeHint::AccessToken,
-            "spa", &ClientAssertion::default(),
+            "spa", &ClientCredentials::default(),
             1_001,
         )
         .unwrap();
@@ -2280,7 +2377,7 @@ mod tests {
                 1_001, None, "https://auth.example/token")
             .unwrap();
         let rt = tok.refresh_token.unwrap();
-        srv.revoke(&rt, TokenTypeHint::RefreshToken, "spa", &ClientAssertion::default(), 1_001)
+        srv.revoke(&rt, TokenTypeHint::RefreshToken, "spa", &ClientCredentials::default(), 1_001)
             .unwrap();
         assert!(!srv
             .introspect_token(&rt, TokenTypeHint::RefreshToken, 1_001)
@@ -2392,13 +2489,14 @@ mod tests {
 
         // RFC 7009: revocation needs client authentication too.
         assert_eq!(
-            srv.revoke(&rt, TokenTypeHint::RefreshToken, "svc", &ClientAssertion::default(), 1_003),
+            srv.revoke(&rt, TokenTypeHint::RefreshToken, "svc", &ClientCredentials::default(), 1_003),
             Err(OAuthError::InvalidClient)
         );
         assert!(srv.introspect_token(&rt, TokenTypeHint::RefreshToken, 1_003).unwrap().active);
-        let auth = ClientAssertion {
+        let auth = ClientCredentials {
             client_assertion_type: Some(CLIENT_ASSERTION_TYPE_JWT_BEARER.into()),
             client_assertion: Some(client_assertion(&key, "https://auth.example", "j3", 1_060)),
+            tls_client_cert: None,
         };
         srv.revoke(&rt, TokenTypeHint::RefreshToken, "svc", &auth, 1_003)
             .unwrap();
@@ -2409,8 +2507,13 @@ mod tests {
     fn discovery_and_registration_advertise_private_key_jwt() {
         let srv = server();
         let doc = srv.openid_configuration();
-        assert!(doc.contains(r#""token_endpoint_auth_methods_supported":["none","private_key_jwt"]"#));
-        assert!(doc.contains(r#""introspection_endpoint_auth_methods_supported":["private_key_jwt"]"#));
+        assert!(doc.contains(
+            r#""token_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth"]"#
+        ));
+        assert!(doc.contains(r#""tls_client_certificate_bound_access_tokens":true"#));
+        assert!(doc.contains(
+            r#""introspection_endpoint_auth_methods_supported":["private_key_jwt","self_signed_tls_client_auth"]"#
+        ));
         let (_, key) = confidential_server();
         let kid = key.public.thumbprint();
         let jwks = format!(r#"{{"keys":[{{"kid":"{kid}",{}]}}"#, &key.public.canonical_json()[1..]);

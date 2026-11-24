@@ -1,0 +1,16 @@
+{
+  "id": "pos-dcr-self-signed-tls",
+  "source": "generated",
+  "description": "self_signed_tls_client_auth registration with the certificate as x5c (RFC 8705 \u00a72.2.2) succeeds.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "https://dyn.example/cb"
+    ],
+    "token_endpoint_auth_method": "self_signed_tls_client_auth",
+    "jwks": "{\"keys\":[{\"x5c\":[\"MIIBFjCByaADAgECAgEBMAUGAytlcDAbMRkwFwYDVQQDDBBhdXRoY3JhZnQtdGVzdC1hMB4XDTI2MTEyNDIzMjM0NVoXDTM2MTEyMTIzMjM0NVowGzEZMBcGA1UEAwwQYXV0aGNyYWZ0LXRlc3QtYTAqMAUGAytlcAMhANULevLfh7xgyfBlYbRB0SE94+D2rxZutzbcu8z3Fx5yozIwMDAdBgNVHQ4EFgQU+BrK6lojaEicDot1YjbOGbiFHTkwDwYDVR0TAQH/BAUwAwEB/zAFBgMrZXADQQA+1N/sRUaFpaO1IoM/6Bml7LMVDaTuuCRmYK4P/kmReV+ONFglBpGZuEMTq3MX5mIbORijDkG2exbvIxzgaocN\"]}]}"
+  },
+  "expect": {
+    "ok": true
+  }
+}

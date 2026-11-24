@@ -13,6 +13,7 @@ pub mod error;
 pub mod federation;
 pub mod id_token;
 pub mod keyring;
+pub mod mtls;
 pub mod par;
 pub mod pkce;
 pub mod refresh;
@@ -29,7 +30,7 @@ pub use client_auth::CLIENT_ASSERTION_TYPE_JWT_BEARER;
 pub use error::OAuthError;
 pub use id_token::{at_hash_eddsa, scope_has_openid};
 pub use server::{
-    AdminError, AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, ClientAssertion,
+    AdminError, AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, ClientCredentials,
     DynamicClientRequest,
     DynamicClientSuccess, Introspection, LoginSubject, ParSuccess, PendingAuthorization,
     ServerConfig, TokenRequest, TokenSuccess, TokenTypeHint, TotpEnrollment, UserInfo, UserSummary,

@@ -21,6 +21,8 @@ pub struct TokenClaims<'a> {
     pub email: Option<&'a str>,
     /// RFC 9449 confirmation thumbprint when DPoP-bound.
     pub cnf_jkt: Option<&'a str>,
+    /// RFC 8705 certificate thumbprint when mTLS-bound (ADR 0017).
+    pub cnf_x5t_s256: Option<&'a str>,
     pub iat: i64,
     pub exp: i64,
 }
@@ -52,11 +54,15 @@ pub fn mint_access_token(
     if let Some(email) = claims.email {
         payload.push_str(&format!(r#","email":"{}""#, json_escape(email)));
     }
+    let mut cnf = Vec::new();
     if let Some(jkt) = claims.cnf_jkt {
-        payload.push_str(&format!(
-            r#","cnf":{{"jkt":"{}"}}"#,
-            json_escape(jkt)
-        ));
+        cnf.push(format!(r#""jkt":"{}""#, json_escape(jkt)));
+    }
+    if let Some(x5t) = claims.cnf_x5t_s256 {
+        cnf.push(format!(r#""x5t#S256":"{}""#, json_escape(x5t)));
+    }
+    if !cnf.is_empty() {
+        payload.push_str(&format!(r#","cnf":{{{}}}"#, cnf.join(",")));
     }
     payload.push('}');
 

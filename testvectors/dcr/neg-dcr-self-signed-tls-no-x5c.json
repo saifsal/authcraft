@@ -1,0 +1,17 @@
+{
+  "id": "neg-dcr-self-signed-tls-no-x5c",
+  "source": "generated",
+  "description": "self_signed_tls_client_auth registration whose keys carry no x5c is rejected.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "https://dyn.example/cb"
+    ],
+    "token_endpoint_auth_method": "self_signed_tls_client_auth",
+    "jwks": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\"}]}"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

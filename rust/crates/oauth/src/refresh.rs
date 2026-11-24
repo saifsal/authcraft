@@ -21,6 +21,9 @@ pub struct RefreshRecord {
     pub expires_at: i64,
     /// When set, refresh requires a matching DPoP proof (RFC 9449 / ADR 0009 B4).
     pub dpop_jkt: Option<String>,
+    /// When set, refresh requires the same TLS client certificate
+    /// (`x5t#S256`, RFC 8705 §3 / ADR 0017).
+    pub mtls_x5t: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -55,6 +58,7 @@ impl RefreshStore {
         email: Option<String>,
         expires_at: i64,
         dpop_jkt: Option<String>,
+        mtls_x5t: Option<String>,
     ) -> Result<String, OAuthError> {
         let family_id = Self::random_token()?;
         let token = Self::random_token()?;
@@ -69,6 +73,7 @@ impl RefreshStore {
                 email,
                 expires_at,
                 dpop_jkt,
+                mtls_x5t,
             },
         );
         Ok(token)
@@ -137,6 +142,7 @@ mod tests {
                 None,
                 10_000,
                 None,
+                None,
             )
             .unwrap();
         let (second, _) = store.rotate(&first, "spa", 1_000, 10_000).unwrap();
@@ -156,6 +162,7 @@ mod tests {
                 None,
                 10_000,
                 Some("jkt-abc".into()),
+                None,
             )
             .unwrap();
         let (second, rec) = store.rotate(&first, "spa", 1_000, 10_000).unwrap();

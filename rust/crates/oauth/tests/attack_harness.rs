@@ -455,7 +455,7 @@ fn attack_dpop_bound_userinfo_without_proof() {
     srv.revoke(
         &tok.access_token,
         TokenTypeHint::AccessToken,
-        "spa", &oauth::ClientAssertion::default(),
+        "spa", &oauth::ClientCredentials::default(),
         1_002,
     )
     .unwrap();

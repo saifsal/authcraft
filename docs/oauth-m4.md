@@ -22,3 +22,22 @@ Vectors: `testvectors/dpop/`.
 cargo test -p oauth --test vectors
 cargo test -p oauth-http
 ```
+
+## TLS and mutual TLS (ADR 0017)
+
+Serve HTTPS with optional client certificates:
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -keyout srv.key -out srv.pem -days 30 -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost"
+AUTHCRAFT_TLS_CERT=srv.pem AUTHCRAFT_TLS_KEY=srv.key cargo run -p oauth-http
+curl --cacert srv.pem https://localhost:8089/.well-known/openid-configuration
+```
+
+A `self_signed_tls_client_auth` client registers its certificate as `x5c` in
+`jwks` and then calls `/token` over a connection that presents that
+certificate (`curl --cert cli.pem --key cli.key ...`). Any client that
+presents a certificate at `/token` without DPoP receives an access token with
+`cnf.x5t#S256`. Vectors: `testvectors/mtls/`; real-TLS test:
+`rust/crates/oauth-http/tests/mtls.rs`.

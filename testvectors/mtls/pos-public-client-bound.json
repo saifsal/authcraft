@@ -1,0 +1,19 @@
+{
+  "id": "pos-public-client-bound",
+  "source": "generated",
+  "description": "A public client presenting a TLS certificate receives a certificate-bound token (RFC 8705 \u00a73, \u00a74).",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "token_cert": "B"
+  },
+  "expect": {
+    "ok": true,
+    "token_type": "Bearer",
+    "cnf_x5t": "B"
+  }
+}

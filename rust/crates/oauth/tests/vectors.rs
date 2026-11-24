@@ -58,6 +58,10 @@ fn introspect_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/introspect")
 }
 
+fn mtls_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/mtls")
+}
+
 fn dcr_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/dcr")
 }
@@ -130,19 +134,20 @@ fn client_assertion_for(
     client_id: &str,
     jti: &str,
     now: i64,
-) -> oauth::ClientAssertion {
+) -> oauth::ClientCredentials {
     let kid = key.public.thumbprint();
     let header = format!(r#"{{"alg":"EdDSA","kid":"{kid}"}}"#);
     let exp = now + 60;
     let payload = format!(
         r#"{{"iss":"{client_id}","sub":"{client_id}","aud":"https://auth.example","jti":"{jti}","exp":{exp}}}"#
     );
-    oauth::ClientAssertion {
+    oauth::ClientCredentials {
         client_assertion_type: Some(oauth::CLIENT_ASSERTION_TYPE_JWT_BEARER.into()),
         client_assertion: Some(
             signing::sign_compact(Alg::EdDSA, &key.pkcs8, header.as_bytes(), payload.as_bytes())
                 .unwrap(),
         ),
+        tls_client_cert: None,
     }
 }
 
@@ -435,7 +440,7 @@ fn run_token_lifecycle_vector(path: &Path) {
             srv.revoke(
                 &first.access_token,
                 oauth::TokenTypeHint::AccessToken,
-                client_id, &oauth::ClientAssertion::default(),
+                client_id, &oauth::ClientCredentials::default(),
                 now_token,
             )
             .unwrap();
@@ -448,7 +453,7 @@ fn run_token_lifecycle_vector(path: &Path) {
             );
         }
         "revoke_refresh" => {
-            srv.revoke(&rt, oauth::TokenTypeHint::RefreshToken, client_id, &oauth::ClientAssertion::default(), now_token)
+            srv.revoke(&rt, oauth::TokenTypeHint::RefreshToken, client_id, &oauth::ClientCredentials::default(), now_token)
                 .unwrap();
             assert!(!introspect(&rt, oauth::TokenTypeHint::RefreshToken).active);
         }
@@ -576,7 +581,7 @@ fn run_par_vector(path: &Path) {
                 request_uri: None,
                 request: None,
             },
-            &oauth::ClientAssertion::default(),
+            &oauth::ClientCredentials::default(),
             now_par,
         )
         .unwrap_or_else(|e| panic!("{case}: par: {e}"));
@@ -1154,9 +1159,10 @@ fn run_client_auth_vector(path: &Path) {
             .unwrap_or_else(|e| panic!("{case}: {e}"))
             .code
     };
-    let client_auth = oauth::ClientAssertion {
+    let client_auth = oauth::ClientCredentials {
         client_assertion_type: optional_string(steps, "client_assertion_type").map(str::to_owned),
         client_assertion: optional_string(steps, "client_assertion").map(str::to_owned),
+        tls_client_cert: None,
     };
     let exchange = |code: String| {
         srv.exchange_token(
@@ -1276,10 +1282,11 @@ fn run_jar_vector(path: &Path) {
     let result = match string(steps, "endpoint") {
         "authorize" => srv.begin_authorize(&req, now),
         "par" => {
-            let client_auth = oauth::ClientAssertion {
+            let client_auth = oauth::ClientCredentials {
                 client_assertion_type: optional_string(steps, "client_assertion_type")
                     .map(str::to_owned),
                 client_assertion: optional_string(steps, "client_assertion").map(str::to_owned),
+                tls_client_cert: None,
             };
             srv.push_authorization(&req, &client_auth, now).and_then(|par| {
                 srv.begin_authorize(
@@ -1394,9 +1401,10 @@ fn run_introspect_vector(path: &Path) {
         )
         .unwrap_or_else(|e| panic!("{case}: token: {e}"));
 
-    let caller_auth = oauth::ClientAssertion {
+    let caller_auth = oauth::ClientCredentials {
         client_assertion_type: optional_string(steps, "caller_assertion_type").map(str::to_owned),
         client_assertion: optional_string(steps, "caller_assertion").map(str::to_owned),
+        tls_client_cert: None,
     };
     let result = srv.introspect(
         &tok.access_token,
@@ -1421,5 +1429,171 @@ fn introspect_shared_vectors() {
     assert!(!files.is_empty(), "no introspect vectors");
     for f in files {
         run_introspect_vector(&f);
+    }
+}
+
+/// DER certificates `A` / `B` from `testvectors/mtls/schema.json`.
+fn mtls_certs() -> (Vec<u8>, Vec<u8>) {
+    let text = fs::read(mtls_vectors_dir().join("schema.json")).unwrap();
+    let schema = json::parse(&text).unwrap();
+    let certs = schema.get("x-authcraft-certs").expect("x-authcraft-certs");
+    let der = |name: &str| {
+        let c = certs.get(name).expect("cert");
+        let der = b64url::decode(string(c, "der_b64url")).unwrap();
+        assert_eq!(oauth::mtls::cert_thumbprint(&der), string(c, "x5t#S256"));
+        der
+    };
+    (der("A"), der("B"))
+}
+
+fn run_mtls_vector(path: &Path) {
+    let case = path.display().to_string();
+    let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(string(&root, "id"), path.file_stem().unwrap().to_str().unwrap());
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+    let client_id = string(steps, "client_id");
+    let redirect_uri = string(steps, "redirect_uri");
+    let verifier = string(steps, "code_verifier");
+    let now_auth = integer(steps, "now_authorize");
+    let now = integer(steps, "now_token");
+
+    let (cert_a, cert_b) = mtls_certs();
+    // `Some(None)` = step present with null (no certificate).
+    let cert_step = |name: &str| -> Option<Option<Vec<u8>>> {
+        match steps.get(name)? {
+            Value::Null => Some(None),
+            Value::String(s) if s == "A" => Some(Some(cert_a.clone())),
+            Value::String(s) if s == "B" => Some(Some(cert_b.clone())),
+            other => panic!("{case}: bad {name}: {other:?}"),
+        }
+    };
+    let srv = AuthorizationServer::new(
+        ServerConfig::new("https://auth.example", "api"),
+        vec![
+            Client::new("spa", vec!["https://app.example/cb".into()]),
+            Client::self_signed_tls(
+                "tls",
+                vec!["https://tls.example/cb".into()],
+                vec![oauth::mtls::cert_thumbprint(&cert_a)],
+            ),
+        ],
+        generate_signing_key(Alg::EdDSA).expect("key"),
+    );
+    let pending = srv
+        .begin_authorize(
+            &AuthorizeRequest {
+                response_type: "code".into(),
+                client_id: client_id.into(),
+                redirect_uri: redirect_uri.into(),
+                code_challenge: pkce::challenge_s256(verifier).unwrap(),
+                code_challenge_method: "S256".into(),
+                state: None,
+                scope: Some("read".into()),
+                nonce: None,
+                request_uri: None,
+                request: None,
+            },
+            now_auth,
+        )
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    let code = srv
+        .finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
+        .unwrap_or_else(|e| panic!("{case}: {e}"))
+        .code;
+
+    let token_htu = "https://auth.example/token";
+    let dpop = bool_field(steps, "dpop").then(|| {
+        let key = generate_signing_key(Alg::EdDSA).unwrap();
+        let nonce = srv.dpop_nonce().unwrap();
+        make_dpop_proof("POST", token_htu, now, "mtls-dpop", &key.pkcs8, &key.public, Some(&nonce))
+    });
+    let assertion = optional_string(steps, "client_assertion").map(str::to_owned);
+    let token_cert = cert_step("token_cert").flatten();
+    let fail = |phase: &str, err: OAuthError| {
+        assert!(!bool_field(expect, "ok"), "{case}: {phase} failed: {err}");
+        assert_eq!(string(expect, "phase"), phase, "{case}");
+        assert_eq!(err.code(), string(expect, "error"), "{case}");
+    };
+
+    let mut tok = match srv.exchange_token_tls(
+        &TokenRequest {
+            grant_type: "authorization_code".into(),
+            code,
+            redirect_uri: redirect_uri.into(),
+            client_id: client_id.into(),
+            code_verifier: verifier.into(),
+            refresh_token: String::new(),
+            client_assertion_type: assertion
+                .as_ref()
+                .map(|_| oauth::CLIENT_ASSERTION_TYPE_JWT_BEARER.to_owned()),
+            client_assertion: assertion,
+        },
+        now,
+        dpop.as_deref(),
+        token_htu,
+        token_cert.as_deref(),
+    ) {
+        Ok(t) => t,
+        Err(e) => return fail("token", e),
+    };
+
+    if let Some(cert) = cert_step("userinfo_cert") {
+        if let Err(e) = srv.userinfo_tls(
+            &tok.access_token,
+            now,
+            None,
+            "https://auth.example/userinfo",
+            cert.as_deref(),
+        ) {
+            return fail("userinfo", e);
+        }
+    }
+    if let Some(cert) = cert_step("refresh_cert") {
+        let rt = tok.refresh_token.clone().expect("refresh_token");
+        tok = match srv.exchange_token_tls(
+            &TokenRequest {
+                grant_type: "refresh_token".into(),
+                code: String::new(),
+                redirect_uri: String::new(),
+                client_id: client_id.into(),
+                code_verifier: String::new(),
+                refresh_token: rt,
+                client_assertion_type: None,
+                client_assertion: None,
+            },
+            now,
+            None,
+            token_htu,
+            cert.as_deref(),
+        ) {
+            Ok(t) => t,
+            Err(e) => return fail("refresh", e),
+        };
+    }
+
+    assert!(bool_field(expect, "ok"), "{case}: expected a failure");
+    assert_eq!(tok.token_type, string(expect, "token_type"), "{case}");
+    let payload = tok.access_token.split('.').nth(1).unwrap();
+    let claims = json::parse(&b64url::decode(payload).unwrap()).unwrap();
+    let x5t = claims
+        .get("cnf")
+        .and_then(|c| c.get("x5t#S256"))
+        .and_then(Value::as_str);
+    let want = match expect.get("cnf_x5t") {
+        Some(Value::String(s)) if s == "A" => Some(oauth::mtls::cert_thumbprint(&cert_a)),
+        Some(Value::String(s)) if s == "B" => Some(oauth::mtls::cert_thumbprint(&cert_b)),
+        _ => None,
+    };
+    assert_eq!(x5t, want.as_deref(), "{case}");
+}
+
+#[test]
+fn mtls_shared_vectors() {
+    let files = load_json_vectors(&mtls_vectors_dir());
+    assert!(!files.is_empty(), "no mtls vectors");
+    for f in files {
+        run_mtls_vector(&f);
     }
 }

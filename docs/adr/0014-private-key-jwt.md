@@ -60,7 +60,8 @@ any client secret.
    client authentication as `/token`: `private_key_jwt` clients must send a
    valid assertion, public clients must not send one. The library takes a
    `ClientAssertion { client_assertion_type, client_assertion }` argument on
-   `push_authorization` and `revoke`.
+   `push_authorization` and `revoke` (renamed `ClientCredentials`, with a TLS
+   certificate field, by [ADR 0017](0017-mutual-tls.md)).
 2. Authentication runs first: at `/par` before parameters are validated or a
    `request_uri` is issued; at `/revoke` before any token lookup.
 3. The `jti` cache is shared across endpoints, so an assertion accepted at
@@ -96,8 +97,8 @@ any client secret.
 
 - Protecting `/introspect` (RFC 7662 §2.1); done in
   [ADR 0016](0016-protected-introspection.md).
-- `client_secret_basic`, `client_secret_post`, `client_secret_jwt`, mTLS
-  (RFC 8705), and `jwks_uri` fetching.
+- `client_secret_basic`, `client_secret_post`, `client_secret_jwt`, and
+  `jwks_uri` fetching. mTLS (RFC 8705) is [ADR 0017](0017-mutual-tls.md).
 - Making `client-authentication+jwt` mandatory by default (opt-in via B3).
 
 ## Consequences

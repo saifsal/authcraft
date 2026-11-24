@@ -267,6 +267,7 @@ Useful design notes while changing verification:
 - [`docs/adr/0014-private-key-jwt.md`](docs/adr/0014-private-key-jwt.md) — confidential clients with `private_key_jwt` (RFC 7523).
 - [`docs/adr/0015-jar-request-objects.md`](docs/adr/0015-jar-request-objects.md) — signed request objects (RFC 9101 JAR).
 - [`docs/adr/0016-protected-introspection.md`](docs/adr/0016-protected-introspection.md) — authenticated `/introspect` and resource-server clients.
+- [`docs/adr/0017-mutual-tls.md`](docs/adr/0017-mutual-tls.md) — optional HTTPS listener and OAuth mutual TLS (RFC 8705).
 - [`docs/oauth-m8.md`](docs/oauth-m8.md) — M8 assurance runbook.
 - [`docs/openid-conformance-checklist.md`](docs/openid-conformance-checklist.md) — OIDF-style OP expectations vs authcraft.
 - [`docs/oauth-m3.md`](docs/oauth-m3.md) — M3 token lifecycle runbook.
@@ -294,7 +295,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 | **M7** | Federation: OIDC relying-party connector, LDAP gateway | Complete for this slice: OIDC RP + LDAP MemoryDirectory gateway ([ADR 0012](docs/adr/0012-federation.md), [docs/oauth-m7.md](docs/oauth-m7.md)). |
 | **M8** | Assurance: OpenID conformance suite, attack harness, fuzzing in CI | Complete for this slice: attack harness, fuzz smoke in CI, [OpenID conformance checklist](docs/openid-conformance-checklist.md) ([ADR 0013](docs/adr/0013-assurance.md), [docs/oauth-m8.md](docs/oauth-m8.md)). |
 
-Post-M8 hardening continues from open rows in the [RFC 9700 checklist](docs/rfc-9700-checklist.md). RFC 9207 `iss` on authorize success redirects is done (discovery advertises `authorization_response_iss_parameter_supported`). Confidential clients authenticate at `/token`, `/par`, and `/revoke` with `private_key_jwt` ([ADR 0014](docs/adr/0014-private-key-jwt.md), `testvectors/client_auth/`), and can send signed request objects (JAR, [ADR 0015](docs/adr/0015-jar-request-objects.md), `testvectors/jar/`). `/introspect` requires `private_key_jwt` callers; admin-registered resource servers may introspect any token ([ADR 0016](docs/adr/0016-protected-introspection.md), `testvectors/introspect/`).
+Post-M8 hardening continues from open rows in the [RFC 9700 checklist](docs/rfc-9700-checklist.md). RFC 9207 `iss` on authorize success redirects is done (discovery advertises `authorization_response_iss_parameter_supported`). Confidential clients authenticate at `/token`, `/par`, and `/revoke` with `private_key_jwt` ([ADR 0014](docs/adr/0014-private-key-jwt.md), `testvectors/client_auth/`), and can send signed request objects (JAR, [ADR 0015](docs/adr/0015-jar-request-objects.md), `testvectors/jar/`). `/introspect` requires `private_key_jwt` callers; admin-registered resource servers may introspect any token ([ADR 0016](docs/adr/0016-protected-introspection.md), `testvectors/introspect/`). With `AUTHCRAFT_TLS_CERT` / `AUTHCRAFT_TLS_KEY` set, `oauth-http` serves HTTPS with optional mutual TLS: `self_signed_tls_client_auth` and certificate-bound tokens ([ADR 0017](docs/adr/0017-mutual-tls.md), `testvectors/mtls/`).
 
 [`docs/rfc-conformance.md`](docs/rfc-conformance.md) is the M0 scope map and the rule for marking a behavior conformant (shared vectors plus agreement across implementations).
 

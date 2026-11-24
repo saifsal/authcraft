@@ -2,11 +2,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod tls;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Form, Query, State};
+use axum::Extension;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -14,7 +17,7 @@ use axum::{Json, Router};
 use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, ClientAssertion, DirectoryBind, DynamicClientRequest,
+    AuthorizationServer, AuthorizeRequest, Client, ClientCredentials, DirectoryBind, DynamicClientRequest,
     LoginSubject, OAuthError, OidcRpConfig, PendingAuthorization, ServerConfig, TokenRequest,
     TokenEndpointAuth, TokenTypeHint, DEMO_ADMIN_TOKEN,
 };
@@ -72,8 +75,13 @@ impl AppState {
     }
 
     pub fn demo() -> Self {
+        Self::demo_with_issuer("http://localhost:8089")
+    }
+
+    /// Demo state with a chosen issuer (e.g. `https://localhost:8089` under TLS).
+    pub fn demo_with_issuer(issuer: &str) -> Self {
         let key = generate_signing_key(Alg::EdDSA).expect("generate EdDSA key");
-        let mut config = ServerConfig::new("http://localhost:8089", "api");
+        let mut config = ServerConfig::new(issuer, "api");
         config.admin_token = DEMO_ADMIN_TOKEN.into();
         let state = Self::new(
             config,
@@ -270,6 +278,16 @@ async fn admin_list_clients(State(state): State<AppState>, headers: HeaderMap) -
     }
 }
 
+/// DER bytes of the TLS client leaf certificate for this connection, inserted
+/// as a request extension by [`serve_tls`] (ADR 0017). Absent on plain HTTP,
+/// so a request header can never supply it.
+#[derive(Debug, Clone, Default)]
+pub struct TlsClientCert(pub Option<Vec<u8>>);
+
+fn tls_cert(ext: &Option<Extension<TlsClientCert>>) -> Option<Vec<u8>> {
+    ext.as_ref().and_then(|Extension(c)| c.0.clone())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AdminCreateClientBody {
     pub client_id: String,
@@ -297,6 +315,11 @@ fn client_auth_from_body(
         (Some("private_key_jwt"), Some(jwks)) => Some(TokenEndpointAuth::PrivateKeyJwt {
             jwks: jwks.to_string(),
         }),
+        (Some("self_signed_tls_client_auth"), Some(jwks)) => {
+            oauth::mtls::thumbprints_from_jwks(&jwks.to_string())
+                .ok()
+                .map(|cert_thumbprints| TokenEndpointAuth::SelfSignedTlsClientAuth { cert_thumbprints })
+        }
         _ => None,
     }
 }
@@ -536,7 +559,11 @@ async fn register_client(
     }
 }
 
-async fn par(State(state): State<AppState>, Form(form): Form<ParForm>) -> Response {
+async fn par(
+    State(state): State<AppState>,
+    cert: Option<Extension<TlsClientCert>>,
+    Form(form): Form<ParForm>,
+) -> Response {
     let req = AuthorizeRequest {
         response_type: form.response_type.unwrap_or_default(),
         client_id: form.client_id.unwrap_or_default(),
@@ -549,9 +576,10 @@ async fn par(State(state): State<AppState>, Form(form): Form<ParForm>) -> Respon
         request_uri: None,
         request: form.request,
     };
-    let client_auth = ClientAssertion {
+    let client_auth = ClientCredentials {
         client_assertion_type: form.client_assertion_type,
         client_assertion: form.client_assertion,
+        tls_client_cert: tls_cert(&cert),
     };
     match state.server.push_authorization(&req, &client_auth, now_unix()) {
         Ok(ok) => Json(serde_json::json!({
@@ -1210,6 +1238,7 @@ fn dpop_header(headers: &HeaderMap) -> Option<&str> {
 async fn token(
     State(state): State<AppState>,
     headers: HeaderMap,
+    cert: Option<Extension<TlsClientCert>>,
     Form(form): Form<TokenForm>,
 ) -> Response {
     let req = TokenRequest {
@@ -1225,7 +1254,13 @@ async fn token(
     let htu = format!("{}/token", state.server.config.issuer);
     match state
         .server
-        .exchange_token(&req, now_unix(), dpop_header(&headers), &htu)
+        .exchange_token_tls(
+            &req,
+            now_unix(),
+            dpop_header(&headers),
+            &htu,
+            tls_cert(&cert).as_deref(),
+        )
     {
         Ok(tok) => {
             let mut body = serde_json::json!({
@@ -1308,7 +1343,11 @@ fn access_token_from_auth(headers: &HeaderMap) -> Option<&str> {
         .or_else(|| value.strip_prefix("DPoP "))
 }
 
-async fn userinfo(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn userinfo(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    cert: Option<Extension<TlsClientCert>>,
+) -> Response {
     let Some(token) = access_token_from_auth(&headers) else {
         return (
             StatusCode::UNAUTHORIZED,
@@ -1324,7 +1363,13 @@ async fn userinfo(State(state): State<AppState>, headers: HeaderMap) -> Response
     let htu = format!("{}/userinfo", state.server.config.issuer);
     match state
         .server
-        .userinfo(token, now_unix(), dpop_header(&headers), &htu)
+        .userinfo_tls(
+            token,
+            now_unix(),
+            dpop_header(&headers),
+            &htu,
+            tls_cert(&cert).as_deref(),
+        )
     {
         Ok(info) => {
             let mut body = serde_json::json!({ "sub": info.sub });
@@ -1369,13 +1414,18 @@ pub struct RevokeForm {
     pub client_assertion: Option<String>,
 }
 
-async fn revoke(State(state): State<AppState>, Form(form): Form<RevokeForm>) -> Response {
+async fn revoke(
+    State(state): State<AppState>,
+    cert: Option<Extension<TlsClientCert>>,
+    Form(form): Form<RevokeForm>,
+) -> Response {
     let client_id = form.client_id.unwrap_or_default();
     let token = form.token.unwrap_or_default();
     let hint = TokenTypeHint::parse(form.token_type_hint.as_deref());
-    let client_auth = ClientAssertion {
+    let client_auth = ClientCredentials {
         client_assertion_type: form.client_assertion_type,
         client_assertion: form.client_assertion,
+        tls_client_cert: tls_cert(&cert),
     };
     // RFC 7009 §2.2: 200 once the client is authenticated, whether or not the
     // token was valid; client authentication failures are `invalid_client`.
@@ -1400,13 +1450,18 @@ pub struct IntrospectForm {
     pub client_assertion: Option<String>,
 }
 
-async fn introspect(State(state): State<AppState>, Form(form): Form<IntrospectForm>) -> Response {
+async fn introspect(
+    State(state): State<AppState>,
+    cert: Option<Extension<TlsClientCert>>,
+    Form(form): Form<IntrospectForm>,
+) -> Response {
     let token = form.token.unwrap_or_default();
     let hint = TokenTypeHint::parse(form.token_type_hint.as_deref());
     let caller = form.client_id.unwrap_or_default();
-    let client_auth = ClientAssertion {
+    let client_auth = ClientCredentials {
         client_assertion_type: form.client_assertion_type,
         client_assertion: form.client_assertion,
+        tls_client_cert: tls_cert(&cert),
     };
     match state
         .server

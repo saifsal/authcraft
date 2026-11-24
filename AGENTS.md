@@ -4,7 +4,7 @@
 
 authcraft is an educational OAuth 2.0 / OpenID Connect identity provider. Its purpose is to learn the protocols by implementing the layers underneath them (JOSE, token issuance, verification, and later the OAuth and OIDC flows) and to compare independent implementations of the same security-critical code with a shared test-vector contract. It has had no external review. It is not a production identity provider.
 
-Milestone M0 (JOSE) is complete for the shared-vector contract. The Rust library crate `jose` at `rust/crates/jose` signs and verifies compact JWS/JWT payloads, parses JWK and JWKS documents, computes RFC 7638 thumbprints, and enforces the verifier rules in `docs/adr/0003-verifier-check-order.md`. Generated vectors live under `testvectors/generated/`; compact RFC examples under `testvectors/rfc/`. Zig (`zig/`) and Go (`go/jose`) implement the same verifier; `go/harness` differentials against `jose-cli`. Milestone M1 (`oauth` + `oauth-http`, `testvectors/oauth/`) is complete. M2 OIDC (`testvectors/oidc/`) is complete. M3 token lifecycle (ADR 0008, `testvectors/token/`) is complete for B1–B3. M4 hardening (optional PAR + DPoP, ADR 0009; [RFC 9700 checklist](docs/rfc-9700-checklist.md)) is complete for this slice. M5 authentication (ADR 0010) is complete for this slice: Argon2id passwords, TOTP, and WebAuthn second factors. M6 control plane (ADR 0011) is complete for this slice: admin API, dynamic client registration, and SCIM Users. M7 federation (ADR 0012) is complete for this slice: OIDC RP connector and LDAP MemoryDirectory gateway. M8 assurance (ADR 0013) is complete for this slice: attack harness, cargo-fuzz CI smoke, and an OpenID conformance checklist. Post-M8 hardening continues from the RFC 9700 open list (e.g. RFC 9207 `iss` on authorize redirects; `private_key_jwt` client auth at `/token`, `/par`, `/revoke`, ADR 0014, `testvectors/client_auth/`; JAR request objects, ADR 0015, `testvectors/jar/`; authenticated `/introspect`, ADR 0016, `testvectors/introspect/`).
+Milestone M0 (JOSE) is complete for the shared-vector contract. The Rust library crate `jose` at `rust/crates/jose` signs and verifies compact JWS/JWT payloads, parses JWK and JWKS documents, computes RFC 7638 thumbprints, and enforces the verifier rules in `docs/adr/0003-verifier-check-order.md`. Generated vectors live under `testvectors/generated/`; compact RFC examples under `testvectors/rfc/`. Zig (`zig/`) and Go (`go/jose`) implement the same verifier; `go/harness` differentials against `jose-cli`. Milestone M1 (`oauth` + `oauth-http`, `testvectors/oauth/`) is complete. M2 OIDC (`testvectors/oidc/`) is complete. M3 token lifecycle (ADR 0008, `testvectors/token/`) is complete for B1–B3. M4 hardening (optional PAR + DPoP, ADR 0009; [RFC 9700 checklist](docs/rfc-9700-checklist.md)) is complete for this slice. M5 authentication (ADR 0010) is complete for this slice: Argon2id passwords, TOTP, and WebAuthn second factors. M6 control plane (ADR 0011) is complete for this slice: admin API, dynamic client registration, and SCIM Users. M7 federation (ADR 0012) is complete for this slice: OIDC RP connector and LDAP MemoryDirectory gateway. M8 assurance (ADR 0013) is complete for this slice: attack harness, cargo-fuzz CI smoke, and an OpenID conformance checklist. Post-M8 hardening continues from the RFC 9700 open list (e.g. RFC 9207 `iss` on authorize redirects; `private_key_jwt` client auth at `/token`, `/par`, `/revoke`, ADR 0014, `testvectors/client_auth/`; JAR request objects, ADR 0015, `testvectors/jar/`; authenticated `/introspect`, ADR 0016, `testvectors/introspect/`; optional HTTPS + RFC 8705 mTLS, ADR 0017, `testvectors/mtls/`).
 
 M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `authcraft-edge` sidecar). M1 (`oauth` + `oauth-http`, ADR 0005) and M2 OIDC (ADR 0006) are complete. [`docs/rfc-conformance.md`](docs/rfc-conformance.md) remains the scope map; [`docs/oauth-m1.md`](docs/oauth-m1.md) and [`docs/oauth-m2.md`](docs/oauth-m2.md) cover those slices. Accepted decisions are in [`docs/adr/`](docs/adr/). The milestone list through M8 is in [`README.md`](README.md).
 
@@ -32,7 +32,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── 0013-assurance.md              # M8 attack harness, fuzzing, conformance map
 │   │   ├── 0014-private-key-jwt.md        # confidential clients (RFC 7523)
 │   │   ├── 0015-jar-request-objects.md    # signed request objects (RFC 9101)
-│   │   └── 0016-protected-introspection.md # authenticated /introspect, resource servers
+│   │   ├── 0016-protected-introspection.md # authenticated /introspect, resource servers
+│   │   └── 0017-mutual-tls.md             # HTTPS listener, RFC 8705 mTLS
 │   ├── rfc-conformance.md                 # scope map per milestone
 │   ├── rfc-9700-checklist.md              # OAuth security BCP status
 │   ├── openid-conformance-checklist.md    # OIDF-style OP expectations
@@ -72,6 +73,7 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   │   ├── refresh.rs, denylist.rs    # refresh families, access-token jti denylist
 │   │   │   ├── keyring.rs                 # signing-key rotation with grace JWKS
 │   │   │   ├── dpop.rs                    # DPoP proofs (RFC 9449)
+│   │   │   ├── mtls.rs                    # x5t#S256 thumbprints, x5c registration (ADR 0017)
 │   │   │   ├── users.rs, totp.rs, webauthn_mfa.rs # resource-owner authentication
 │   │   │   ├── scim.rs                    # SCIM 2.0 Users
 │   │   │   ├── federation/                # oidc_rp.rs, ldap.rs
@@ -81,10 +83,12 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │       └── attack_harness.rs          # protocol attack negatives (ADR 0013)
 │   ├── crates/oauth-http/
 │   │   ├── Cargo.toml                     # Axum binary + lib; depends on oauth, jose
-│   │   ├── src/main.rs                    # binds 127.0.0.1:8089
+│   │   ├── src/main.rs                    # binds 127.0.0.1:8089; HTTPS when AUTHCRAFT_TLS_* set
 │   │   ├── src/lib.rs                     # HTTP routes for every endpoint
+│   │   ├── src/tls.rs                     # rustls listener, optional client certs (ADR 0017)
 │   │   ├── tests/e2e.rs                   # authorize → login → token → jose verify
-│   │   └── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
+│   │   ├── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
+│   │   └── tests/mtls.rs                  # self-signed mTLS + bound tokens over real TLS
 │   └── fuzz/                              # cargo-fuzz targets (own Cargo.lock; not in workspace)
 │       └── fuzz_targets/                  # b64url_decode, json_parse, jose_verify, pkce_challenge
 ├── zig/
@@ -127,7 +131,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   ├── admin/, dcr/                       # M6 admin API and registration (ADR 0011)
 │   ├── client_auth/                       # private_key_jwt (ADR 0014)
 │   ├── jar/                               # request objects (ADR 0015)
-│   └── introspect/                        # introspection callers (ADR 0016)
+│   ├── introspect/                        # introspection callers (ADR 0016)
+│   └── mtls/                              # RFC 8705 client auth and binding (ADR 0017)
 ├── LICENSE                                # GNU GPL version 3
 ├── README.md
 └── AGENTS.md
@@ -246,7 +251,7 @@ Local tooling:
 
 - The tree is the source of truth for what runs. M1 OAuth is Rust-only so far (`oauth` + `oauth-http`); there is no Zig/Go OAuth harness yet. Rust, Zig, and Go JOSE verifiers agree on the shared JOSE vectors; the Go harness differentially checks Go against `jose-cli`. `go/harness/oauth_jwt_test.go` re-verifies the JWTs in `testvectors/client_auth/`, `jar/`, and `introspect/` at the JWT layer only; its `jwtVerdicts` table must classify every vector file in those directories.
 - `testvectors/generated/` holds the ADR 0003 minimum negative vector set and positive time-boundary cases. `testvectors/rfc/` holds compact examples copied from RFC 7515 and RFC 8037. They are run against Rust (`tests/vectors.rs`), Zig (`zig/src/vectors.zig`), and Go (`go/harness`). The examples whose headers have no `kid` expect `key_not_found`; their signature bytes are checked by `rfc_signatures_match_when_kid_is_absent` in each language. `testvectors/oauth/` is the M1 contract and `testvectors/oidc/` is the M2 contract for the Rust `oauth` crate (ADR 0005 / ADR 0006). Unit tests are not a substitute for those suites; `docs/rfc-conformance.md` says so.
-- `cargo test` does start the `oauth-http` e2e harness in-process; `cargo run -p oauth-http` is the interactive demo. There is still no production deployment.
+- `cargo test` does start the `oauth-http` e2e harness in-process; `cargo run -p oauth-http` is the interactive demo. Set `AUTHCRAFT_TLS_CERT` and `AUTHCRAFT_TLS_KEY` to PEM files to serve HTTPS (optional mTLS) instead; `tests/mtls.rs` starts a real TLS listener on an ephemeral loopback port. There is still no production deployment.
 - `docs/threat-model.md` is not in the repository.
 - Rust older than 1.88 does not compile `b64url.rs`. A default toolchain of 1.83 fails even though `Cargo.lock` resolves.
 - `Jwks::parse` fails the whole document on bad JSON, a missing `keys` array, a non-object entry, a non-string `kid`, or a duplicate `kid`. An entry that is present but unusable (unknown `kty` or `crv`, bad base64url, wrong length, non-string `alg` or `use`, `oct` key under 32 bytes) stays in the set and can never be selected (`key_not_found`). Private members such as `d` are ignored.

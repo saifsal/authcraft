@@ -1,0 +1,18 @@
+{
+  "id": "neg-self-signed-no-cert",
+  "source": "generated",
+  "description": "A self_signed_tls_client_auth client without a TLS client certificate gets invalid_client.",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_id": "tls",
+    "redirect_uri": "https://tls.example/cb"
+  },
+  "expect": {
+    "ok": false,
+    "phase": "token",
+    "error": "invalid_client"
+  }
+}

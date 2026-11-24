@@ -11,6 +11,10 @@ pub enum TokenEndpointAuth {
     /// Confidential client (`private_key_jwt`, RFC 7523) with its public JWKS
     /// document as registered.
     PrivateKeyJwt { jwks: String },
+    /// Confidential client (`self_signed_tls_client_auth`, RFC 8705 §2.2)
+    /// identified by the `x5t#S256` thumbprints of its registered
+    /// certificates (ADR 0017).
+    SelfSignedTlsClientAuth { cert_thumbprints: Vec<String> },
 }
 
 impl TokenEndpointAuth {
@@ -19,6 +23,7 @@ impl TokenEndpointAuth {
         match self {
             TokenEndpointAuth::None => "none",
             TokenEndpointAuth::PrivateKeyJwt { .. } => "private_key_jwt",
+            TokenEndpointAuth::SelfSignedTlsClientAuth { .. } => "self_signed_tls_client_auth",
         }
     }
 }
@@ -49,6 +54,19 @@ impl Client {
             token_endpoint_auth: TokenEndpointAuth::None,
             require_signed_request_object: false,
             resource_server: false,
+        }
+    }
+
+    /// A confidential client that authenticates with a self-signed TLS client
+    /// certificate (RFC 8705 §2.2); `cert_thumbprints` are `x5t#S256` values.
+    pub fn self_signed_tls(
+        client_id: impl Into<String>,
+        redirect_uris: Vec<String>,
+        cert_thumbprints: Vec<String>,
+    ) -> Self {
+        Self {
+            token_endpoint_auth: TokenEndpointAuth::SelfSignedTlsClientAuth { cert_thumbprints },
+            ..Self::new(client_id, redirect_uris)
         }
     }
 

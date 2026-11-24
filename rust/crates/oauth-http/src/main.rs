@@ -1,6 +1,12 @@
-//! authcraft M1 OAuth HTTP demo (ADR 0005).
+//! authcraft OAuth HTTP demo (ADR 0005, ADR 0017).
+//!
+//! Plain HTTP on 127.0.0.1:8089 by default. With `AUTHCRAFT_TLS_CERT` and
+//! `AUTHCRAFT_TLS_KEY` (PEM paths) set, serves HTTPS with optional mutual TLS
+//! and issuer `https://localhost:8089`.
 
-use oauth_http::{app, AppState};
+use std::sync::Arc;
+
+use oauth_http::{app, tls, AppState};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -9,10 +15,27 @@ async fn main() {
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
 
-    let state = AppState::demo();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8089")
         .await
         .expect("bind 127.0.0.1:8089");
-    tracing::info!("oauth-http listening on http://localhost:8089");
-    axum::serve(listener, app(state)).await.expect("serve");
+
+    match (
+        std::env::var("AUTHCRAFT_TLS_CERT"),
+        std::env::var("AUTHCRAFT_TLS_KEY"),
+    ) {
+        (Ok(cert), Ok(key)) => {
+            let config = tls::server_config_from_pem_files(&cert, &key).expect("TLS config");
+            let state = AppState::demo_with_issuer("https://localhost:8089");
+            tracing::info!("oauth-http listening on https://localhost:8089 (mTLS optional)");
+            tls::serve_tls(listener, app(state), Arc::new(config))
+                .await
+                .expect("serve");
+        }
+        _ => {
+            tracing::info!("oauth-http listening on http://localhost:8089");
+            axum::serve(listener, app(AppState::demo()))
+                .await
+                .expect("serve");
+        }
+    }
 }

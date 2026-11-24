@@ -1,0 +1,20 @@
+{
+  "id": "neg-userinfo-wrong-cert",
+  "source": "generated",
+  "description": "UserInfo rejects a certificate-bound token presented with another certificate.",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_id": "spa",
+    "redirect_uri": "https://app.example/cb",
+    "token_cert": "B",
+    "userinfo_cert": "A"
+  },
+  "expect": {
+    "ok": false,
+    "phase": "userinfo",
+    "error": "invalid_token"
+  }
+}

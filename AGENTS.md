@@ -62,7 +62,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │       ├── Cargo.toml                     # Axum binary + lib; depends on oauth, jose
 │       ├── src/main.rs                    # binds 127.0.0.1:8089
 │       ├── src/lib.rs                     # /authorize, /token, /login, JWKS
-│       └── tests/e2e.rs                   # authorize → login → token → jose verify
+│       ├── tests/e2e.rs                   # authorize → login → token → jose verify
+│       └── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
 ├── zig/
 │   ├── mise.toml                          # zig = "0.14.1"
 │   ├── build.zig

@@ -1,0 +1,16 @@
+{
+  "id": "pos-dcr-private-key-jwt",
+  "source": "generated",
+  "description": "private_key_jwt registration with an inline public JWKS (RFC 8037 A.2 key) succeeds.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "https://dyn.example/cb"
+    ],
+    "token_endpoint_auth_method": "private_key_jwt",
+    "jwks": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"rfc8037-a2\",\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\"}]}"
+  },
+  "expect": {
+    "ok": true
+  }
+}

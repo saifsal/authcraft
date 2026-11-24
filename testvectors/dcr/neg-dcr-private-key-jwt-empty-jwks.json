@@ -1,0 +1,17 @@
+{
+  "id": "neg-dcr-private-key-jwt-empty-jwks",
+  "source": "generated",
+  "description": "private_key_jwt registration with an empty key set is rejected.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "https://dyn.example/cb"
+    ],
+    "token_endpoint_auth_method": "private_key_jwt",
+    "jwks": "{\"keys\":[]}"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

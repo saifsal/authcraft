@@ -1,0 +1,18 @@
+{
+  "id": "pos-private-key-jwt",
+  "source": "generated",
+  "description": "A private_key_jwt client with a valid RFC 7523 assertion (RFC 8037 A.2 key, aud = issuer) exchanges its code.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLTEiLCJleHAiOjEwNjF9.ubdq3TOd_dUW0WFUWY56dNltjb32l9cUCP-_xBBpbG6BIPTE2n3Ze6XKnyWQCromwv41G1yxs-tZDj0BBvsaCg"
+  },
+  "expect": {
+    "ok": true
+  }
+}

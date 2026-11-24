@@ -1,7 +1,7 @@
 {
   "id": "neg-dcr-confidential",
   "source": "generated",
-  "description": "Confidential token_endpoint_auth_method is rejected.",
+  "description": "client_secret_basic (shared-secret auth) is rejected; only none and private_key_jwt are supported.",
   "steps": {
     "action": "register",
     "redirect_uris": ["https://dyn.example/cb"],

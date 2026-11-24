@@ -1,0 +1,19 @@
+{
+  "id": "neg-unknown-kid",
+  "source": "generated",
+  "description": "An assertion whose kid is not in the registered client JWKS gets invalid_client.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6Im90aGVyIn0.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLTQiLCJleHAiOjEwNjF9.iLw411YWMUDVP96fyQLzxzywoTQOG8syeMxWo_KG1wLPKtK5_jB5eOB9ppZqKx1I7EYg7Vat0TeleFSrMSaYDg"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_client"
+  }
+}

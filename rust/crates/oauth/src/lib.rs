@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod client;
+pub mod client_auth;
 pub mod code;
 pub mod denylist;
 pub mod dpop;
@@ -22,7 +23,8 @@ pub mod totp;
 pub mod users;
 pub mod webauthn_mfa;
 
-pub use client::{Client, ClientRegistry};
+pub use client::{Client, ClientRegistry, TokenEndpointAuth};
+pub use client_auth::CLIENT_ASSERTION_TYPE_JWT_BEARER;
 pub use error::OAuthError;
 pub use id_token::{at_hash_eddsa, scope_has_openid};
 pub use server::{

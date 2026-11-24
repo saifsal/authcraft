@@ -46,6 +46,10 @@ fn admin_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/admin")
 }
 
+fn client_auth_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/client_auth")
+}
+
 fn dcr_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/dcr")
 }
@@ -181,6 +185,8 @@ fn run_code_flow_vector(path: &Path) {
         client_id: token_client.into(),
         code_verifier: token_verifier.into(),
         refresh_token: String::new(),
+        client_assertion_type: None,
+        client_assertion: None,
     };
 
     let first = srv.exchange_token(&req, now_token, None, "https://auth.example/token");
@@ -354,6 +360,8 @@ fn run_token_lifecycle_vector(path: &Path) {
                 client_id: client_id.into(),
                 code_verifier: verifier.into(),
                 refresh_token: String::new(),
+                client_assertion_type: None,
+                client_assertion: None,
             },
             now_token, None, "https://auth.example/token")
         .unwrap_or_else(|e| panic!("{case}: token: {e}"));
@@ -404,6 +412,8 @@ fn run_token_lifecycle_vector(path: &Path) {
                         client_id: client_id.into(),
                         code_verifier: String::new(),
                         refresh_token: rt,
+                        client_assertion_type: None,
+                        client_assertion: None,
                     },
                     now_refresh, None, "https://auth.example/token")
                 .unwrap_or_else(|e| panic!("{case}: refresh: {e}"));
@@ -435,6 +445,8 @@ fn run_token_lifecycle_vector(path: &Path) {
                         client_id: client_id.into(),
                         code_verifier: String::new(),
                         refresh_token: rt.clone(),
+                        client_assertion_type: None,
+                        client_assertion: None,
                     },
                     now_refresh, None, "https://auth.example/token")
                 .unwrap();
@@ -447,6 +459,8 @@ fn run_token_lifecycle_vector(path: &Path) {
                         client_id: client_id.into(),
                         code_verifier: String::new(),
                         refresh_token: rt,
+                        client_assertion_type: None,
+                        client_assertion: None,
                     },
                     now_refresh + 1, None, "https://auth.example/token")
                 .expect_err("reuse");
@@ -461,6 +475,8 @@ fn run_token_lifecycle_vector(path: &Path) {
                         client_id: client_id.into(),
                         code_verifier: String::new(),
                         refresh_token: rotated,
+                        client_assertion_type: None,
+                        client_assertion: None,
                     },
                     now_refresh + 2, None, "https://auth.example/token")
                 .expect_err("family dead");
@@ -543,6 +559,8 @@ fn run_par_vector(path: &Path) {
                         client_id: client_id.into(),
                         code_verifier: verifier.into(),
                         refresh_token: String::new(),
+                        client_assertion_type: None,
+                        client_assertion: None,
                     },
                     now_token, None, "https://auth.example/token")
                 .unwrap();
@@ -642,6 +660,8 @@ fn run_dpop_vector(path: &Path) {
         client_id: client_id.into(),
         code_verifier: verifier.into(),
         refresh_token: String::new(),
+        client_assertion_type: None,
+        client_assertion: None,
     };
 
     let exchange_ok = |srv: &AuthorizationServer, jti: &str| {
@@ -846,6 +866,7 @@ fn run_admin_vector(path: &Path) {
                     client_id: client_id.into(),
                     redirect_uris: vec![redirect_uri.into()],
                     client_name: optional_string(steps, "client_name").map(str::to_owned),
+                    token_endpoint_auth: Default::default(),
                 },
             )
             .unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -882,6 +903,8 @@ fn run_admin_vector(path: &Path) {
                         client_id: client_id.into(),
                         code_verifier: verifier.into(),
                         refresh_token: String::new(),
+                        client_assertion_type: None,
+                        client_assertion: None,
                     },
                     now_token,
                     None,
@@ -926,6 +949,7 @@ fn run_dcr_vector(path: &Path) {
                 client_name: optional_string(steps, "client_name").map(str::to_owned),
                 token_endpoint_auth_method: optional_string(steps, "token_endpoint_auth_method")
                     .map(str::to_owned),
+                jwks: optional_string(steps, "jwks").map(str::to_owned),
             });
             if bool_field(expect, "ok") {
                 result.unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -941,6 +965,7 @@ fn run_dcr_vector(path: &Path) {
                     redirect_uris: vec![redirect_uri.into()],
                     client_name: optional_string(steps, "client_name").map(str::to_owned),
                     token_endpoint_auth_method: Some("none".into()),
+                    jwks: None,
                 })
                 .unwrap_or_else(|e| panic!("{case}: {e}"));
             let client_id = &reg.client_id;
@@ -976,6 +1001,8 @@ fn run_dcr_vector(path: &Path) {
                         client_id: client_id.clone(),
                         code_verifier: verifier.into(),
                         refresh_token: String::new(),
+                        client_assertion_type: None,
+                        client_assertion: None,
                     },
                     now_token,
                     None,
@@ -994,5 +1021,124 @@ fn dcr_shared_vectors() {
     assert!(!files.is_empty(), "no dcr vectors");
     for f in files {
         run_dcr_vector(&f);
+    }
+}
+
+/// Client JWKS for `svc` in `testvectors/client_auth/schema.json` (RFC 8037 A.2 public key).
+const CLIENT_AUTH_SVC_JWKS: &str = r#"{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"rfc8037-a2","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#;
+
+fn run_client_auth_vector(path: &Path) {
+    let case = path.display().to_string();
+    let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(string(&root, "id"), path.file_stem().unwrap().to_str().unwrap());
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+    let client_id = string(steps, "client_id");
+    let redirect_uri = string(steps, "redirect_uri");
+    let verifier = string(steps, "code_verifier");
+    let now_auth = integer(steps, "now_authorize");
+    let now_token = integer(steps, "now_token");
+
+    let key = generate_signing_key(Alg::EdDSA).expect("key");
+    let srv = AuthorizationServer::new(
+        ServerConfig::new("https://auth.example", "api"),
+        vec![
+            Client::new("spa", vec!["https://app.example/cb".into()]),
+            Client::private_key_jwt(
+                "svc",
+                vec!["https://svc.example/cb".into()],
+                CLIENT_AUTH_SVC_JWKS,
+            ),
+        ],
+        key,
+    );
+    let issue_code = || {
+        let pending = srv
+            .begin_authorize(
+                &AuthorizeRequest {
+                    response_type: "code".into(),
+                    client_id: client_id.into(),
+                    redirect_uri: redirect_uri.into(),
+                    code_challenge: pkce::challenge_s256(verifier).unwrap(),
+                    code_challenge_method: "S256".into(),
+                    state: None,
+                    scope: Some("read".into()),
+                    nonce: None,
+                    request_uri: None,
+                },
+                now_auth,
+            )
+            .unwrap_or_else(|e| panic!("{case}: {e}"));
+        srv.finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
+            .unwrap_or_else(|e| panic!("{case}: {e}"))
+            .code
+    };
+    let exchange = |code: String| {
+        srv.exchange_token(
+            &TokenRequest {
+                grant_type: "authorization_code".into(),
+                code,
+                redirect_uri: redirect_uri.into(),
+                client_id: client_id.into(),
+                code_verifier: verifier.into(),
+                refresh_token: String::new(),
+                client_assertion_type: optional_string(steps, "client_assertion_type")
+                    .map(str::to_owned),
+                client_assertion: optional_string(steps, "client_assertion").map(str::to_owned),
+            },
+            now_token,
+            None,
+            "https://auth.example/token",
+        )
+    };
+
+    let mut result = exchange(issue_code());
+    if bool_field(steps, "replay_assertion") {
+        result.unwrap_or_else(|e| panic!("{case}: first exchange: {e}"));
+        let second_code = issue_code();
+        // Client authentication runs before the code is redeemed, so the replay
+        // fails with invalid_client rather than consuming the code.
+        result = exchange(second_code);
+        assert!(
+            matches!(result, Err(OAuthError::InvalidClient)),
+            "{case}: replay should fail client auth first"
+        );
+    }
+
+    if bool_field(expect, "ok") {
+        let tok = result.unwrap_or_else(|e| panic!("{case}: {e}"));
+        let jwks = Jwks::parse(srv.jwks_document_at(now_token).as_bytes()).unwrap();
+        let verified = verify::verify(
+            tok.access_token.as_bytes(),
+            &jwks,
+            &Policy {
+                algorithms: vec![Alg::EdDSA],
+                issuer: Some("https://auth.example".into()),
+                audience: Some("api".into()),
+                now: now_token,
+                leeway: 0,
+                typ: Some("at+jwt".into()),
+                max_token_bytes: 8192,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+        assert_eq!(
+            verified.claims.get("client_id").and_then(Value::as_str),
+            Some(client_id),
+            "{case}"
+        );
+    } else {
+        let err = result.expect_err("expected client auth failure");
+        assert_eq!(err.code(), string(expect, "error"), "{case}");
+    }
+}
+
+#[test]
+fn client_auth_shared_vectors() {
+    let files = load_json_vectors(&client_auth_vectors_dir());
+    assert!(!files.is_empty(), "no client_auth vectors");
+    for f in files {
+        run_client_auth_vector(&f);
     }
 }

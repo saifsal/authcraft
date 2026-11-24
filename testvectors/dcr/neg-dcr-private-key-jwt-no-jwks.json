@@ -1,0 +1,16 @@
+{
+  "id": "neg-dcr-private-key-jwt-no-jwks",
+  "source": "generated",
+  "description": "private_key_jwt registration without jwks is rejected.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "https://dyn.example/cb"
+    ],
+    "token_endpoint_auth_method": "private_key_jwt"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

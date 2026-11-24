@@ -1,0 +1,19 @@
+{
+  "id": "neg-aud-token-endpoint",
+  "source": "generated",
+  "description": "An assertion whose aud is the token endpoint URL, not the issuer identifier, gets invalid_client (rfc7523bis).",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZS90b2tlbiIsImp0aSI6ImNhLTIiLCJleHAiOjEwNjF9.qlhpBypltbAgpqc1hxbCU0ZyDGMoELM9sA2IKXTF2U2fSgZ2PsH-kGEB-ZqEk1I_hbVkYtGPKAn64-5rIjfkBw"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_client"
+  }
+}

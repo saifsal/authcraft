@@ -16,7 +16,7 @@ use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
     AuthorizationServer, AuthorizeRequest, Client, DirectoryBind, DynamicClientRequest,
     LoginSubject, OAuthError, OidcRpConfig, PendingAuthorization, ServerConfig, TokenRequest,
-    TokenTypeHint, DEMO_ADMIN_TOKEN,
+    TokenEndpointAuth, TokenTypeHint, DEMO_ADMIN_TOKEN,
 };
 use serde::Deserialize;
 
@@ -253,6 +253,7 @@ async fn admin_list_clients(State(state): State<AppState>, headers: HeaderMap) -
                         "client_id": c.client_id,
                         "redirect_uris": c.redirect_uris,
                         "client_name": c.client_name,
+                        "token_endpoint_auth_method": c.token_endpoint_auth.method(),
                     })
                 })
                 .collect();
@@ -272,6 +273,24 @@ pub struct AdminCreateClientBody {
     pub client_id: String,
     pub redirect_uris: Vec<String>,
     pub client_name: Option<String>,
+    /// `none` (default) or `private_key_jwt` (ADR 0014).
+    pub token_endpoint_auth_method: Option<String>,
+    /// Public JWKS object; required for `private_key_jwt`.
+    pub jwks: Option<serde_json::Value>,
+}
+
+/// Maps RFC 7591 `token_endpoint_auth_method` + `jwks` to the client model.
+fn client_auth_from_body(
+    method: Option<&str>,
+    jwks: Option<&serde_json::Value>,
+) -> Option<TokenEndpointAuth> {
+    match (method, jwks) {
+        (None | Some("none"), None) => Some(TokenEndpointAuth::None),
+        (Some("private_key_jwt"), Some(jwks)) => Some(TokenEndpointAuth::PrivateKeyJwt {
+            jwks: jwks.to_string(),
+        }),
+        _ => None,
+    }
 }
 
 async fn admin_create_client(
@@ -279,10 +298,20 @@ async fn admin_create_client(
     headers: HeaderMap,
     Json(body): Json<AdminCreateClientBody>,
 ) -> Response {
+    let Some(token_endpoint_auth) =
+        client_auth_from_body(body.token_endpoint_auth_method.as_deref(), body.jwks.as_ref())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid_request" })),
+        )
+            .into_response();
+    };
     let client = Client {
         client_id: body.client_id,
         redirect_uris: body.redirect_uris,
         client_name: body.client_name,
+        token_endpoint_auth,
     };
     match state.server.create_client(admin_bearer(&headers), client) {
         Ok(c) => (
@@ -291,6 +320,7 @@ async fn admin_create_client(
                 "client_id": c.client_id,
                 "redirect_uris": c.redirect_uris,
                 "client_name": c.client_name,
+                "token_endpoint_auth_method": c.token_endpoint_auth.method(),
             })),
         )
             .into_response(),
@@ -447,6 +477,8 @@ pub struct RegisterClientBody {
     pub redirect_uris: Option<Vec<String>>,
     pub client_name: Option<String>,
     pub token_endpoint_auth_method: Option<String>,
+    /// Inline public JWKS object for `private_key_jwt` (ADR 0014).
+    pub jwks: Option<serde_json::Value>,
 }
 
 async fn register_client(
@@ -457,6 +489,7 @@ async fn register_client(
         redirect_uris: body.redirect_uris.unwrap_or_default(),
         client_name: body.client_name,
         token_endpoint_auth_method: body.token_endpoint_auth_method,
+        jwks: body.jwks.map(|v| v.to_string()),
     };
     match state.server.register_client(&req) {
         Ok(ok) => (
@@ -465,7 +498,7 @@ async fn register_client(
                 "client_id": ok.client_id,
                 "redirect_uris": ok.redirect_uris,
                 "client_name": ok.client_name,
-                "token_endpoint_auth_method": "none",
+                "token_endpoint_auth_method": ok.token_endpoint_auth_method,
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
             })),
@@ -1134,6 +1167,8 @@ pub struct TokenForm {
     pub client_id: Option<String>,
     pub code_verifier: Option<String>,
     pub refresh_token: Option<String>,
+    pub client_assertion_type: Option<String>,
+    pub client_assertion: Option<String>,
 }
 
 fn dpop_header(headers: &HeaderMap) -> Option<&str> {
@@ -1152,6 +1187,8 @@ async fn token(
         client_id: form.client_id.unwrap_or_default(),
         code_verifier: form.code_verifier.unwrap_or_default(),
         refresh_token: form.refresh_token.unwrap_or_default(),
+        client_assertion_type: form.client_assertion_type,
+        client_assertion: form.client_assertion,
     };
     let htu = format!("{}/token", state.server.config.issuer);
     match state
@@ -1199,7 +1236,9 @@ async fn token(
 fn token_error(err: OAuthError) -> Response {
     let status = match err {
         OAuthError::InvalidRequest | OAuthError::UnsupportedGrantType => StatusCode::BAD_REQUEST,
-        OAuthError::UnauthorizedClient | OAuthError::InvalidToken => StatusCode::UNAUTHORIZED,
+        OAuthError::UnauthorizedClient | OAuthError::InvalidClient | OAuthError::InvalidToken => {
+            StatusCode::UNAUTHORIZED
+        }
         OAuthError::InvalidGrant | OAuthError::UseDpopNonce => StatusCode::BAD_REQUEST,
         OAuthError::ServerError => StatusCode::INTERNAL_SERVER_ERROR,
     };

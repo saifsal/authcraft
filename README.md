@@ -264,6 +264,7 @@ Useful design notes while changing verification:
 - [`docs/adr/0011-control-plane.md`](docs/adr/0011-control-plane.md) — M6 admin / DCR / SCIM.
 - [`docs/adr/0012-federation.md`](docs/adr/0012-federation.md) — M7 OIDC RP / LDAP federation.
 - [`docs/adr/0013-assurance.md`](docs/adr/0013-assurance.md) — M8 attack harness / fuzz / conformance map.
+- [`docs/adr/0014-private-key-jwt.md`](docs/adr/0014-private-key-jwt.md) — confidential clients with `private_key_jwt` (RFC 7523).
 - [`docs/oauth-m8.md`](docs/oauth-m8.md) — M8 assurance runbook.
 - [`docs/openid-conformance-checklist.md`](docs/openid-conformance-checklist.md) — OIDF-style OP expectations vs authcraft.
 - [`docs/oauth-m3.md`](docs/oauth-m3.md) — M3 token lifecycle runbook.
@@ -291,7 +292,7 @@ Agent instructions for working in this repository live in [`AGENTS.md`](AGENTS.m
 | **M7** | Federation: OIDC relying-party connector, LDAP gateway | Complete for this slice: OIDC RP + LDAP MemoryDirectory gateway ([ADR 0012](docs/adr/0012-federation.md), [docs/oauth-m7.md](docs/oauth-m7.md)). |
 | **M8** | Assurance: OpenID conformance suite, attack harness, fuzzing in CI | Complete for this slice: attack harness, fuzz smoke in CI, [OpenID conformance checklist](docs/openid-conformance-checklist.md) ([ADR 0013](docs/adr/0013-assurance.md), [docs/oauth-m8.md](docs/oauth-m8.md)). |
 
-Post-M8 hardening continues from open rows in the [RFC 9700 checklist](docs/rfc-9700-checklist.md). RFC 9207 `iss` on authorize success redirects is done (discovery advertises `authorization_response_iss_parameter_supported`).
+Post-M8 hardening continues from open rows in the [RFC 9700 checklist](docs/rfc-9700-checklist.md). RFC 9207 `iss` on authorize success redirects is done (discovery advertises `authorization_response_iss_parameter_supported`). Confidential clients can authenticate at `/token` with `private_key_jwt` ([ADR 0014](docs/adr/0014-private-key-jwt.md), `testvectors/client_auth/`).
 
 [`docs/rfc-conformance.md`](docs/rfc-conformance.md) is the M0 scope map and the rule for marking a behavior conformant (shared vectors plus agreement across implementations).
 

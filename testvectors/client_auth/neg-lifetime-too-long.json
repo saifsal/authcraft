@@ -1,0 +1,19 @@
+{
+  "id": "neg-lifetime-too-long",
+  "source": "generated",
+  "description": "An assertion with exp more than 300 seconds after now gets invalid_client.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLTMiLCJleHAiOjEzMDJ9.cXKR3jpe7PoBqNzHdg4MiMBy3nZa7wJ3eoF948K-MarTK4P6SjD2LWGCBXsVp-xzuk8iHyrpJKnfo92ghXf-Dg"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_client"
+  }
+}

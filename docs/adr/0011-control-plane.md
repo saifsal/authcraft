@@ -26,7 +26,9 @@ in-process Rust control plane (deferring a separate Go service).
 ### B2 — Dynamic client registration (RFC 7591)
 
 1. `POST /register` (no admin token) accepts JSON `redirect_uris` (≥1), optional
-   `client_name`, and optional `token_endpoint_auth_method` which must be `none`.
+   `client_name`, and optional `token_endpoint_auth_method` which must be `none`
+   (amended by [ADR 0014](0014-private-key-jwt.md): `private_key_jwt` with an
+   inline `jwks` is also accepted).
 2. Issues opaque `client_id` (random base64url). No `client_secret`, no
    registration access token, no RFC 7592 management endpoint.
 3. Response includes `token_endpoint_auth_method: "none"`,

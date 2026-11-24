@@ -15,7 +15,7 @@ Vectors: `testvectors/admin/`.
 
 ## B2 — Dynamic client registration
 
-`POST /register` (public clients only). Discovery: `registration_endpoint`.
+`POST /register` (public `none` clients, or `private_key_jwt` with an inline `jwks`; ADR 0014). Discovery: `registration_endpoint`.
 Vectors: `testvectors/dcr/`.
 
 ## B3 — SCIM 2.0 Users

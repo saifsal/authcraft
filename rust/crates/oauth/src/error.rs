@@ -7,6 +7,8 @@ use std::fmt;
 pub enum OAuthError {
     InvalidRequest,
     UnauthorizedClient,
+    /// Client authentication failed (RFC 6749 §5.2, ADR 0014).
+    InvalidClient,
     InvalidGrant,
     UnsupportedGrantType,
     /// Bearer access token rejected at UserInfo (RFC 6750).
@@ -22,6 +24,7 @@ impl OAuthError {
         match self {
             OAuthError::InvalidRequest => "invalid_request",
             OAuthError::UnauthorizedClient => "unauthorized_client",
+            OAuthError::InvalidClient => "invalid_client",
             OAuthError::InvalidGrant => "invalid_grant",
             OAuthError::UnsupportedGrantType => "unsupported_grant_type",
             OAuthError::InvalidToken => "invalid_token",

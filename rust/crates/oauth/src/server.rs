@@ -10,7 +10,8 @@ use jose::signing::SigningKey;
 use jose::verify::{self, Policy};
 use ring::rand::{SecureRandom, SystemRandom};
 
-use crate::client::{Client, ClientRegistry};
+use crate::client::{Client, ClientRegistry, TokenEndpointAuth};
+use crate::client_auth::{self, ClientAssertionJtiCache, CLIENT_ASSERTION_TYPE_JWT_BEARER};
 use crate::code::{AuthorizationCode, CodeStore, DEFAULT_CODE_TTL_SECS};
 use crate::denylist::JtiDenylist;
 use crate::dpop::{self, DpopJtiCache};
@@ -92,12 +93,15 @@ pub struct TotpEnrollment {
     pub otpauth_uri: String,
 }
 
-/// RFC 7591 dynamic client registration request (public clients only).
+/// RFC 7591 dynamic client registration request (ADR 0011 B2 / ADR 0014).
 #[derive(Debug, Clone)]
 pub struct DynamicClientRequest {
     pub redirect_uris: Vec<String>,
     pub client_name: Option<String>,
+    /// `none` (default) or `private_key_jwt`.
     pub token_endpoint_auth_method: Option<String>,
+    /// Inline public JWKS document; required for `private_key_jwt` only.
+    pub jwks: Option<String>,
 }
 
 /// RFC 7591 registration response fields.
@@ -106,6 +110,7 @@ pub struct DynamicClientSuccess {
     pub client_id: String,
     pub redirect_uris: Vec<String>,
     pub client_name: Option<String>,
+    pub token_endpoint_auth_method: &'static str,
 }
 
 /// Validated authorize request awaiting resource-owner authentication.
@@ -183,6 +188,10 @@ pub struct TokenRequest {
     pub client_id: String,
     pub code_verifier: String,
     pub refresh_token: String,
+    /// RFC 7523 `client_assertion_type` (confidential clients, ADR 0014).
+    pub client_assertion_type: Option<String>,
+    /// RFC 7523 `client_assertion` JWT (confidential clients, ADR 0014).
+    pub client_assertion: Option<String>,
 }
 
 /// UserInfo response claims.
@@ -286,6 +295,7 @@ pub struct AuthorizationServer {
     keys: Mutex<Keyring>,
     par: Mutex<ParStore>,
     dpop_jtis: Mutex<DpopJtiCache>,
+    client_assertion_jtis: Mutex<ClientAssertionJtiCache>,
     /// Current AS-issued DPoP nonce (RFC 9449).
     dpop_nonce: Mutex<String>,
     users: Mutex<UserStore>,
@@ -306,6 +316,7 @@ impl AuthorizationServer {
             keys: Mutex::new(Keyring::from_signing_key(signing, grace)),
             par: Mutex::new(ParStore::new()),
             dpop_jtis: Mutex::new(DpopJtiCache::new()),
+            client_assertion_jtis: Mutex::new(ClientAssertionJtiCache::new()),
             dpop_nonce: Mutex::new(String::new()),
             users: Mutex::new(UserStore::new()),
             webauthn,
@@ -350,20 +361,69 @@ impl AuthorizationServer {
             .cloned()
     }
 
+    /// Token-endpoint client authentication (ADR 0014).
+    ///
+    /// Public clients must not send a client assertion. `private_key_jwt`
+    /// clients must send a valid, unused RFC 7523 assertion. Runs before any
+    /// code, refresh token, or DPoP proof is consumed.
+    fn authenticate_client(&self, req: &TokenRequest, now: i64) -> Result<Client, OAuthError> {
+        let client = self.lookup_client(&req.client_id)?;
+        match &client.token_endpoint_auth {
+            TokenEndpointAuth::None => {
+                if req.client_assertion_type.is_some() || req.client_assertion.is_some() {
+                    return Err(OAuthError::InvalidClient);
+                }
+            }
+            TokenEndpointAuth::PrivateKeyJwt { jwks } => {
+                if req.client_assertion_type.as_deref() != Some(CLIENT_ASSERTION_TYPE_JWT_BEARER) {
+                    return Err(OAuthError::InvalidClient);
+                }
+                let assertion = req
+                    .client_assertion
+                    .as_deref()
+                    .filter(|a| !a.is_empty())
+                    .ok_or(OAuthError::InvalidClient)?;
+                let mut cache = self
+                    .client_assertion_jtis
+                    .lock()
+                    .map_err(|_| OAuthError::ServerError)?;
+                client_auth::verify_client_assertion(
+                    assertion,
+                    &client.client_id,
+                    jwks,
+                    &self.config.issuer,
+                    now,
+                    &mut cache,
+                )?;
+            }
+        }
+        Ok(client)
+    }
+
+    fn validate_client_metadata(client: &Client) -> bool {
+        match &client.token_endpoint_auth {
+            TokenEndpointAuth::None => true,
+            TokenEndpointAuth::PrivateKeyJwt { jwks } => client_auth::parse_client_jwks(jwks).is_ok(),
+        }
+    }
+
     /// List registered clients (admin).
     pub fn list_clients(&self, admin_token: Option<&str>) -> Result<Vec<Client>, AdminError> {
         self.require_admin(admin_token)?;
         Ok(self.clients.lock().expect("clients lock").list().to_vec())
     }
 
-    /// Create a public client (admin).
+    /// Create a client (admin). A `private_key_jwt` client needs a non-empty JWKS.
     pub fn create_client(
         &self,
         admin_token: Option<&str>,
         client: Client,
     ) -> Result<Client, AdminError> {
         self.require_admin(admin_token)?;
-        if client.client_id.trim().is_empty() || client.redirect_uris.is_empty() {
+        if client.client_id.trim().is_empty()
+            || client.redirect_uris.is_empty()
+            || !Self::validate_client_metadata(&client)
+        {
             return Err(AdminError::InvalidRequest);
         }
         let mut reg = self.clients.lock().expect("clients lock");
@@ -684,7 +744,7 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"scopes_supported":["openid","profile","email"]}}"#,
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"scopes_supported":["openid","profile","email"]}}"#,
             require_par = if self.config.require_par {
                 "true"
             } else {
@@ -693,7 +753,8 @@ impl AuthorizationServer {
         )
     }
 
-    /// RFC 7591 dynamic registration for public clients (ADR 0011 B2).
+    /// RFC 7591 dynamic registration (ADR 0011 B2). `private_key_jwt` clients
+    /// supply an inline `jwks` (ADR 0014); `jwks_uri` is not supported.
     pub fn register_client(
         &self,
         req: &DynamicClientRequest,
@@ -703,16 +764,21 @@ impl AuthorizationServer {
         {
             return Err(OAuthError::InvalidRequest);
         }
-        if let Some(method) = &req.token_endpoint_auth_method {
-            if method != "none" {
-                return Err(OAuthError::InvalidRequest);
+        let token_endpoint_auth = match (req.token_endpoint_auth_method.as_deref(), &req.jwks) {
+            (None | Some("none"), None) => TokenEndpointAuth::None,
+            (Some("private_key_jwt"), Some(jwks)) => {
+                client_auth::parse_client_jwks(jwks)?;
+                TokenEndpointAuth::PrivateKeyJwt { jwks: jwks.clone() }
             }
-        }
+            _ => return Err(OAuthError::InvalidRequest),
+        };
+        let token_endpoint_auth_method = token_endpoint_auth.method();
         let client_id = Self::new_jti().map_err(|_| OAuthError::ServerError)?;
         let client = Client {
             client_id: client_id.clone(),
             redirect_uris: req.redirect_uris.clone(),
             client_name: req.client_name.clone(),
+            token_endpoint_auth,
         };
         if !self.clients.lock().expect("clients lock").insert(client) {
             return Err(OAuthError::ServerError);
@@ -721,6 +787,7 @@ impl AuthorizationServer {
             client_id,
             redirect_uris: req.redirect_uris.clone(),
             client_name: req.client_name.clone(),
+            token_endpoint_auth_method,
         })
     }
 
@@ -975,7 +1042,7 @@ impl AuthorizationServer {
         dpop_proof: Option<&str>,
         token_htu: &str,
     ) -> Result<TokenSuccess, OAuthError> {
-        self.lookup_client(&req.client_id)?;
+        self.authenticate_client(req, now)?;
 
         // DPoP (including nonce challenge) before redeem so `use_dpop_nonce`
         // does not consume the authorization code.
@@ -1054,7 +1121,7 @@ impl AuthorizationServer {
         dpop_proof: Option<&str>,
         token_htu: &str,
     ) -> Result<TokenSuccess, OAuthError> {
-        self.lookup_client(&req.client_id)?;
+        self.authenticate_client(req, now)?;
         if req.refresh_token.is_empty() {
             return Err(OAuthError::InvalidRequest);
         }
@@ -1310,6 +1377,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: verifier,
                     refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_001, None, "https://auth.example/token")
             .unwrap();
@@ -1374,6 +1443,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: verifier,
                     refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_001, None, "https://auth.example/token")
             .unwrap();
@@ -1444,6 +1515,8 @@ mod tests {
             client_id: "spa".into(),
             code_verifier: verifier,
             refresh_token: String::new(),
+            client_assertion_type: None,
+            client_assertion: None,
         };
         srv.exchange_token(&req, 1_001, None, "https://auth.example/token").unwrap();
         assert!(matches!(
@@ -1470,6 +1543,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: verifier,
                     refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_001, None, "https://auth.example/token")
             .unwrap();
@@ -1483,6 +1558,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: String::new(),
                     refresh_token: rt.clone(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_002, None, "https://auth.example/token")
             .unwrap();
@@ -1497,6 +1574,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: String::new(),
                     refresh_token: rt,
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_003, None, "https://auth.example/token"),
             Err(OAuthError::InvalidGrant)
@@ -1662,6 +1741,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: "b".repeat(43),
                     refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_001, None, "https://auth.example/token"),
             Err(OAuthError::InvalidGrant)
@@ -1686,6 +1767,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: verifier,
                     refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_001, None, "https://auth.example/token")
             .unwrap();
@@ -1728,6 +1811,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: verifier,
                     refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_001, None, "https://auth.example/token")
             .unwrap();
@@ -1763,6 +1848,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: verifier2,
                     refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_004, None, "https://auth.example/token")
             .unwrap();
@@ -1817,6 +1904,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: v,
                     refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 2_001, None, "https://auth.example/token")
             .unwrap();
@@ -1910,6 +1999,8 @@ mod tests {
                 client_id: "spa".into(),
                 code_verifier: verifier,
                 refresh_token: String::new(),
+                client_assertion_type: None,
+                client_assertion: None,
             },
             1_001,
             "https://auth.example/token",
@@ -1968,6 +2059,8 @@ mod tests {
                 client_id: "spa".into(),
                 code_verifier: verifier,
                 refresh_token: String::new(),
+                client_assertion_type: None,
+                client_assertion: None,
             },
             1_001,
             "https://auth.example/token",
@@ -1984,6 +2077,8 @@ mod tests {
                 client_id: "spa".into(),
                 code_verifier: String::new(),
                 refresh_token: rt,
+                client_assertion_type: None,
+                client_assertion: None,
             },
             1_001,
             "https://auth.example/token",
@@ -2012,6 +2107,8 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: verifier,
                     refresh_token: String::new(),
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_001, None, "https://auth.example/token")
             .unwrap();
@@ -2031,9 +2128,124 @@ mod tests {
                     client_id: "spa".into(),
                     code_verifier: String::new(),
                     refresh_token: rt,
+                    client_assertion_type: None,
+                    client_assertion: None,
                 },
                 1_002, None, "https://auth.example/token"),
             Err(OAuthError::InvalidGrant)
         ));
+    }
+
+    fn confidential_server() -> (AuthorizationServer, SigningKey) {
+        let client_key = generate_signing_key(Alg::EdDSA).unwrap();
+        let kid = client_key.public.thumbprint();
+        let canonical = client_key.public.canonical_json();
+        let jwks = format!(r#"{{"keys":[{{"kid":"{kid}",{}]}}"#, &canonical[1..]);
+        let srv = AuthorizationServer::new(
+            ServerConfig::new("https://auth.example", "api"),
+            vec![Client::private_key_jwt(
+                "svc",
+                vec!["https://svc.example/cb".into()],
+                jwks,
+            )],
+            generate_signing_key(Alg::EdDSA).unwrap(),
+        );
+        (srv, client_key)
+    }
+
+    fn client_assertion(key: &SigningKey, aud: &str, jti: &str, exp: i64) -> String {
+        let kid = key.public.thumbprint();
+        let header = format!(r#"{{"alg":"EdDSA","kid":"{kid}"}}"#);
+        let payload =
+            format!(r#"{{"iss":"svc","sub":"svc","aud":"{aud}","jti":"{jti}","exp":{exp}}}"#);
+        jose::signing::sign_compact(Alg::EdDSA, &key.pkcs8, header.as_bytes(), payload.as_bytes())
+            .unwrap()
+    }
+
+    #[test]
+    fn failed_client_auth_does_not_consume_code_and_refresh_requires_auth() {
+        let (srv, key) = confidential_server();
+        let verifier = "c".repeat(43);
+        let pending = srv
+            .begin_authorize(
+                &AuthorizeRequest {
+                    response_type: "code".into(),
+                    client_id: "svc".into(),
+                    redirect_uri: "https://svc.example/cb".into(),
+                    code_challenge: pkce::challenge_s256(&verifier).unwrap(),
+                    code_challenge_method: "S256".into(),
+                    state: None,
+                    scope: Some("read".into()),
+                    nonce: None,
+                    request_uri: None,
+                },
+                1_000,
+            )
+            .unwrap();
+        let code = srv
+            .finish_authorize(pending, &LoginSubject::new("alice"), 1_000)
+            .unwrap()
+            .code;
+        let req = |assertion: Option<String>, grant: &str, refresh: String| TokenRequest {
+            grant_type: grant.into(),
+            code: code.clone(),
+            redirect_uri: "https://svc.example/cb".into(),
+            client_id: "svc".into(),
+            code_verifier: verifier.clone(),
+            refresh_token: refresh,
+            client_assertion_type: assertion
+                .as_ref()
+                .map(|_| CLIENT_ASSERTION_TYPE_JWT_BEARER.to_owned()),
+            client_assertion: assertion,
+        };
+        let htu = "https://auth.example/token";
+
+        let bad = client_assertion(&key, htu, "j0", 1_060);
+        assert_eq!(
+            srv.exchange_token(&req(Some(bad), "authorization_code", String::new()), 1_001, None, htu),
+            Err(OAuthError::InvalidClient)
+        );
+        let good = client_assertion(&key, "https://auth.example", "j1", 1_060);
+        let tok = srv
+            .exchange_token(&req(Some(good), "authorization_code", String::new()), 1_001, None, htu)
+            .unwrap();
+        let rt = tok.refresh_token.unwrap();
+
+        assert_eq!(
+            srv.exchange_token(&req(None, "refresh_token", rt.clone()), 1_002, None, htu),
+            Err(OAuthError::InvalidClient)
+        );
+        let good2 = client_assertion(&key, "https://auth.example", "j2", 1_060);
+        assert!(srv
+            .exchange_token(&req(Some(good2), "refresh_token", rt), 1_002, None, htu)
+            .is_ok());
+    }
+
+    #[test]
+    fn discovery_and_registration_advertise_private_key_jwt() {
+        let srv = server();
+        let doc = srv.openid_configuration();
+        assert!(doc.contains(r#""token_endpoint_auth_methods_supported":["none","private_key_jwt"]"#));
+        let (_, key) = confidential_server();
+        let kid = key.public.thumbprint();
+        let jwks = format!(r#"{{"keys":[{{"kid":"{kid}",{}]}}"#, &key.public.canonical_json()[1..]);
+        let ok = srv
+            .register_client(&DynamicClientRequest {
+                redirect_uris: vec!["https://dyn.example/cb".into()],
+                client_name: None,
+                token_endpoint_auth_method: Some("private_key_jwt".into()),
+                jwks: Some(jwks.clone()),
+            })
+            .unwrap();
+        assert_eq!(ok.token_endpoint_auth_method, "private_key_jwt");
+        assert_eq!(
+            srv.register_client(&DynamicClientRequest {
+                redirect_uris: vec!["https://dyn.example/cb".into()],
+                client_name: None,
+                token_endpoint_auth_method: None,
+                jwks: Some(jwks),
+            }),
+            Err(OAuthError::InvalidRequest)
+        );
     }
 }

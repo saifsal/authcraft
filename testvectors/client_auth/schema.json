@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://authcraft.local/testvectors/client_auth/schema.json",
+  "title": "authcraft private_key_jwt client authentication vector (ADR 0014)",
+  "type": "object",
+  "required": [
+    "id",
+    "source",
+    "description",
+    "steps",
+    "expect"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "steps": {
+      "type": "object",
+      "required": [
+        "client_id",
+        "redirect_uri",
+        "code_verifier",
+        "subject",
+        "now_authorize",
+        "now_token"
+      ],
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "redirect_uri": {
+          "type": "string"
+        },
+        "code_verifier": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "now_authorize": {
+          "type": "integer"
+        },
+        "now_token": {
+          "type": "integer"
+        },
+        "client_assertion_type": {
+          "type": "string"
+        },
+        "client_assertion": {
+          "type": "string"
+        },
+        "replay_assertion": {
+          "type": "boolean"
+        }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "required": [
+        "ok"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "enum": [
+            "invalid_client",
+            "invalid_grant",
+            "invalid_request",
+            "unauthorized_client"
+          ]
+        }
+      }
+    }
+  },
+  "x-authcraft-server": {
+    "issuer": "https://auth.example",
+    "clients": [
+      {
+        "client_id": "spa",
+        "redirect_uris": [
+          "https://app.example/cb"
+        ],
+        "token_endpoint_auth_method": "none"
+      },
+      {
+        "client_id": "svc",
+        "redirect_uris": [
+          "https://svc.example/cb"
+        ],
+        "token_endpoint_auth_method": "private_key_jwt",
+        "jwks": {
+          "keys": [
+            {
+              "kty": "OKP",
+              "crv": "Ed25519",
+              "kid": "rfc8037-a2",
+              "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

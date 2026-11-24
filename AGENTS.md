@@ -14,7 +14,7 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 .
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                         # Rust/Zig/Go tests + gen-vectors dirty check
+│       └── ci.yml                         # Rust/Zig/Go tests, gen-vectors dirty check, fuzz smoke
 ├── docs/
 │   ├── adr/
 │   │   ├── 0001-eddsa-default.md          # EdDSA default; HS256 verify-only; no `none`
@@ -23,47 +23,70 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── 0004-zig-c-abi.md              # Zig verify C ABI for embedding
 │   │   ├── 0005-oauth-code-pkce.md        # M1 authorization code + PKCE
 │   │   ├── 0006-oidc-core-code.md         # M2 OpenID Connect (code + PKCE)
-│   │   └── 0007-zig-edge-sidecar.md       # Zig authcraft-edge verify sidecar
-│   ├── rfc-conformance.md                 # M0/M1/M2 scope map
-│   ├── oauth-m1.md                        # M1 runbook
-│   └── oauth-m2.md                        # M2 OIDC runbook
+│   │   ├── 0007-zig-edge-sidecar.md       # Zig authcraft-edge verify sidecar
+│   │   ├── 0008-token-lifecycle.md        # M3 refresh / revoke / introspect / key rotation
+│   │   ├── 0009-hardening-par-dpop.md     # M4 PAR, DPoP, RFC 9207 iss
+│   │   ├── 0010-authentication.md         # M5 Argon2id, TOTP, WebAuthn
+│   │   ├── 0011-control-plane.md          # M6 admin API, DCR, SCIM
+│   │   ├── 0012-federation.md             # M7 OIDC RP, LDAP gateway
+│   │   ├── 0013-assurance.md              # M8 attack harness, fuzzing, conformance map
+│   │   ├── 0014-private-key-jwt.md        # confidential clients (RFC 7523)
+│   │   ├── 0015-jar-request-objects.md    # signed request objects (RFC 9101)
+│   │   └── 0016-protected-introspection.md # authenticated /introspect, resource servers
+│   ├── rfc-conformance.md                 # scope map per milestone
+│   ├── rfc-9700-checklist.md              # OAuth security BCP status
+│   ├── openid-conformance-checklist.md    # OIDF-style OP expectations
+│   └── oauth-m1.md … oauth-m8.md          # per-milestone runbooks
 ├── rust/
 │   ├── Cargo.toml                         # workspace; jose, jose-cli, oauth, oauth-http
 │   ├── Cargo.lock
 │   ├── mise.toml                          # rust = "stable"
 │   ├── crates/jose/
-│       ├── Cargo.toml                     # package jose 0.1.0, edition 2021, publish = false
-│       ├── src/
-│       │   ├── lib.rs                     # #![forbid(unsafe_code)]; module root
-│       │   ├── alg.rs                     # EdDSA, ES256, HS256
-│       │   ├── b64url.rs                  # strict unpadded canonical base64url
-│       │   ├── json.rs                    # strict JSON parser (duplicate keys rejected)
-│       │   ├── jwk.rs                     # Ed25519 and P-256 public keys; thumbprints
-│       │   ├── jwks.rs                    # JWKS parse and kid selection
-│       │   ├── signature.rs               # signature verification
-│       │   ├── signing.rs                 # EdDSA and ES256 signing; compact JWS
-│       │   └── verify.rs                  # compact JWS/JWT verification and claims
-│       ├── tests/thumbprint.rs            # RFC 8037 Appendix A thumbprint vectors
-│       └── tests/vectors.rs               # runs testvectors/ against the Rust verifier
-│   └── crates/jose-cli/
-│       ├── Cargo.toml                     # binary jose-cli (verify, keygen, sign, jwks, gen-vectors)
-│       ├── src/main.rs
-│       ├── src/gen_vectors.rs             # regenerates testvectors/generated/
-│       ├── tests/keygen.rs
-│       ├── tests/sign.rs
-│       ├── tests/jwks.rs
-│       ├── tests/gen_vectors.rs
-│       └── tests/verify.rs                # runs jose-cli against testvectors/
+│   │   ├── Cargo.toml                     # package jose 0.1.0, edition 2021, publish = false
+│   │   ├── src/
+│   │   │   ├── lib.rs                     # #![forbid(unsafe_code)]; module root
+│   │   │   ├── alg.rs                     # EdDSA, ES256, HS256
+│   │   │   ├── b64url.rs                  # strict unpadded canonical base64url
+│   │   │   ├── json.rs                    # strict JSON parser (duplicate keys rejected)
+│   │   │   ├── jwk.rs                     # Ed25519 and P-256 public keys; thumbprints
+│   │   │   ├── jwks.rs                    # JWKS parse and kid selection
+│   │   │   ├── signature.rs               # signature verification
+│   │   │   ├── signing.rs                 # EdDSA and ES256 signing; compact JWS
+│   │   │   └── verify.rs                  # compact JWS/JWT verification and claims
+│   │   ├── tests/thumbprint.rs            # RFC 8037 Appendix A thumbprint vectors
+│   │   └── tests/vectors.rs               # runs testvectors/ against the Rust verifier
+│   ├── crates/jose-cli/
+│   │   ├── Cargo.toml                     # binary jose-cli (verify, keygen, sign, jwks, gen-vectors)
+│   │   ├── src/main.rs
+│   │   ├── src/gen_vectors.rs             # regenerates testvectors/generated/
+│   │   └── tests/                         # keygen, sign, jwks, gen_vectors, verify
 │   ├── crates/oauth/
-│   │   ├── Cargo.toml                     # package oauth 0.1.0; depends on jose + ring
-│   │   ├── src/                           # pkce, client, code, token, id_token, server, error
-│   │   └── tests/vectors.rs               # runs testvectors/oauth/ and testvectors/oidc/
-│   └── crates/oauth-http/
-│       ├── Cargo.toml                     # Axum binary + lib; depends on oauth, jose
-│       ├── src/main.rs                    # binds 127.0.0.1:8089
-│       ├── src/lib.rs                     # /authorize, /token, /login, JWKS
-│       ├── tests/e2e.rs                   # authorize → login → token → jose verify
-│       └── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
+│   │   ├── Cargo.toml                     # package oauth 0.1.0; jose, ring, argon2, webauthn-rs
+│   │   ├── src/
+│   │   │   ├── server.rs                  # AuthorizationServer: authorize, token, PAR, DCR, admin, SCIM
+│   │   │   ├── client.rs                  # Client, TokenEndpointAuth, registry
+│   │   │   ├── client_auth.rs             # private_key_jwt assertions (ADR 0014)
+│   │   │   ├── request_object.rs          # JAR request objects (ADR 0015)
+│   │   │   ├── pkce.rs, code.rs, par.rs   # PKCE, authorization codes, pushed requests
+│   │   │   ├── token.rs, id_token.rs      # access token and ID token minting
+│   │   │   ├── refresh.rs, denylist.rs    # refresh families, access-token jti denylist
+│   │   │   ├── keyring.rs                 # signing-key rotation with grace JWKS
+│   │   │   ├── dpop.rs                    # DPoP proofs (RFC 9449)
+│   │   │   ├── users.rs, totp.rs, webauthn_mfa.rs # resource-owner authentication
+│   │   │   ├── scim.rs                    # SCIM 2.0 Users
+│   │   │   ├── federation/                # oidc_rp.rs, ldap.rs
+│   │   │   └── error.rs, lib.rs
+│   │   └── tests/
+│   │       ├── vectors.rs                 # runs every OAuth testvectors/ directory
+│   │       └── attack_harness.rs          # protocol attack negatives (ADR 0013)
+│   ├── crates/oauth-http/
+│   │   ├── Cargo.toml                     # Axum binary + lib; depends on oauth, jose
+│   │   ├── src/main.rs                    # binds 127.0.0.1:8089
+│   │   ├── src/lib.rs                     # HTTP routes for every endpoint
+│   │   ├── tests/e2e.rs                   # authorize → login → token → jose verify
+│   │   └── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
+│   └── fuzz/                              # cargo-fuzz targets (own Cargo.lock; not in workspace)
+│       └── fuzz_targets/                  # b64url_decode, json_parse, jose_verify, pkce_challenge
 ├── zig/
 │   ├── mise.toml                          # zig = "0.14.1"
 │   ├── build.zig
@@ -88,13 +111,23 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   ├── mise.toml                          # go = "1.27.4"
 │   ├── go.mod                             # module github.com/saifsal/authcraft/go
 │   ├── jose/                              # compact JWS/JWT verifier (stdlib crypto)
-│   └── harness/                           # shared vectors + differential vs jose-cli
+│   └── harness/
+│       ├── vectors_test.go                # JOSE vectors + differential vs jose-cli
+│       └── oauth_jwt_test.go              # JWT layer of client_auth/jar/introspect vectors
 ├── testvectors/
+│   ├── README.md
+│   ├── schema.json                        # JOSE vector schema
 │   ├── generated/                         # ADR 0003 negative and boundary vectors
 │   ├── rfc/                               # compact examples copied from RFC 7515 and RFC 8037
-│   ├── oauth/                             # M1 PKCE / code-exchange vectors (ADR 0005)
-│   ├── oidc/                              # M2 openid / nonce / UserInfo vectors (ADR 0006)
-│   └── schema.json                        # JOSE vector schema
+│   ├── oauth/                             # M1 PKCE / code exchange (ADR 0005)
+│   ├── oidc/                              # M2 openid / nonce / UserInfo (ADR 0006)
+│   ├── token/                             # M3 refresh / revoke / introspect (ADR 0008)
+│   ├── par/, dpop/                        # M4 PAR and DPoP (ADR 0009)
+│   ├── authn/                             # M5 password / TOTP (ADR 0010)
+│   ├── admin/, dcr/                       # M6 admin API and registration (ADR 0011)
+│   ├── client_auth/                       # private_key_jwt (ADR 0014)
+│   ├── jar/                               # request objects (ADR 0015)
+│   └── introspect/                        # introspection callers (ADR 0016)
 ├── LICENSE                                # GNU GPL version 3
 ├── README.md
 └── AGENTS.md

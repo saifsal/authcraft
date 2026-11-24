@@ -1,0 +1,19 @@
+{
+  "id": "neg-revoke-missing-assertion",
+  "source": "generated",
+  "description": "A private_key_jwt client that calls /revoke without an assertion gets invalid_client.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "endpoint": "revoke",
+    "token": "not-a-real-token"
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_client"
+  }
+}

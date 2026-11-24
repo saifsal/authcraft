@@ -56,7 +56,20 @@
           "type": "string"
         },
         "replay_assertion": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Use the assertion once at `endpoint`, then again at /token for a second code; expect the second use to fail."
+        },
+        "endpoint": {
+          "enum": [
+            "token",
+            "par",
+            "revoke"
+          ],
+          "default": "token"
+        },
+        "token": {
+          "type": "string",
+          "description": "Token presented to /revoke."
         }
       }
     },

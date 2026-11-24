@@ -1,0 +1,20 @@
+{
+  "id": "pos-revoke-private-key-jwt",
+  "source": "generated",
+  "description": "A private_key_jwt client authenticates at /revoke (RFC 7009 \u00a72.1); an unknown token still succeeds.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "endpoint": "revoke",
+    "token": "not-a-real-token",
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLXJldm9rZSIsImV4cCI6MTA2MX0.E9YXLrbJovcMyZVajvdC_jNYXWWPERwcg24z3zsVRv8BxYf2Lc02RF7FwvYrDiwpgmNsWJmYAyiCkAzDvl83Cw"
+  },
+  "expect": {
+    "ok": true
+  }
+}

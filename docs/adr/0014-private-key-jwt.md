@@ -1,6 +1,6 @@
 # ADR 0014: Confidential clients with `private_key_jwt`
 
-- **Status:** Accepted
+- **Status:** Accepted (amended as slices land)
 - **Date:** 2026-11-24
 
 ## Context
@@ -50,11 +50,31 @@ any client secret.
    published RFC 8037 Appendix A.2 Ed25519 key) and `private_key_jwt` cases in
    `testvectors/dcr/`.
 
+## Amendments
+
+### B2 — Client authentication at `/par` and `/revoke`
+
+1. `POST /par` (RFC 9126 §2) and `POST /revoke` (RFC 7009 §2.1) apply the same
+   client authentication as `/token`: `private_key_jwt` clients must send a
+   valid assertion, public clients must not send one. The library takes a
+   `ClientAssertion { client_assertion_type, client_assertion }` argument on
+   `push_authorization` and `revoke`.
+2. Authentication runs first: at `/par` before parameters are validated or a
+   `request_uri` is issued; at `/revoke` before any token lookup.
+3. The `jti` cache is shared across endpoints, so an assertion accepted at
+   `/par` cannot be replayed at `/token` or `/revoke`.
+4. `aud` is still the issuer identifier only. RFC 9126 also allows the token
+   or PAR endpoint URL; this profile does not (rfc7523bis).
+5. `oauth-http` returns HTTP 401 with `invalid_client` (or
+   `unauthorized_client` for an unknown `client_id`) from both endpoints.
+   `/revoke` previously answered 200 for an unknown client; once the client is
+   authenticated it still answers 200 whether or not the token was valid.
+6. Vectors: `endpoint: "par"` / `"revoke"` cases in `testvectors/client_auth/`.
+
 ## Not in this slice
 
-- Client authentication at `/par`, `/revoke`, and `/introspect` (RFC 9126 §2,
-  RFC 7009 §2.1, RFC 7662 §2.1). These endpoints still identify the client by
-  `client_id` only.
+- Protecting `/introspect` (RFC 7662 §2.1). Its callers are resource servers,
+  which this AS does not register, so it remains unauthenticated.
 - `client_secret_basic`, `client_secret_post`, `client_secret_jwt`, mTLS
   (RFC 8705), and `jwks_uri` fetching.
 - A `typ` requirement on the assertion
@@ -62,6 +82,7 @@ any client secret.
 
 ## Consequences
 
-- RFC 9700 "confidential clients / client auth" moves from open to partial.
+- RFC 9700 "confidential clients / client auth" moves from open to partial
+  (B1) and covers `/token`, `/par`, and `/revoke` after B2.
 - `TokenRequest` gains `client_assertion_type` and `client_assertion`;
   `DynamicClientRequest` gains `jwks`; `OAuthError` gains `InvalidClient`.

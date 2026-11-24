@@ -28,7 +28,8 @@ pub use client_auth::CLIENT_ASSERTION_TYPE_JWT_BEARER;
 pub use error::OAuthError;
 pub use id_token::{at_hash_eddsa, scope_has_openid};
 pub use server::{
-    AdminError, AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, DynamicClientRequest,
+    AdminError, AuthorizationServer, AuthorizationSuccess, AuthorizeRequest, ClientAssertion,
+    DynamicClientRequest,
     DynamicClientSuccess, Introspection, LoginSubject, ParSuccess, PendingAuthorization,
     ServerConfig, TokenRequest, TokenSuccess, TokenTypeHint, TotpEnrollment, UserInfo, UserSummary,
     DEMO_ADMIN_TOKEN,

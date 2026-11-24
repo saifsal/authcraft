@@ -18,7 +18,7 @@ this repository. Status values match [rfc-9700-checklist.md](rfc-9700-checklist.
 | PAR (optional) | partial | ADR 0009; not required |
 | DPoP (optional) | partial | ADR 0009 |
 | Dynamic client registration | partial | `none` and `private_key_jwt` with inline `jwks` (ADR 0011 / 0014) |
-| Token endpoint client auth (`private_key_jwt`) | done | ADR 0014; `testvectors/client_auth/` |
+| Back-channel client auth (`private_key_jwt`) | done | `/token`, `/par`, `/revoke` (ADR 0014); `testvectors/client_auth/` |
 | Request object / JAR | open | Out of scope |
 | Hybrid / implicit profiles | open | Not offered |
 | Full OIDF conformance suite in CI | open | Operator-run; this checklist tracks gaps |

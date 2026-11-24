@@ -1,0 +1,19 @@
+{
+  "id": "pos-par-private-key-jwt",
+  "source": "generated",
+  "description": "A private_key_jwt client authenticates at /par (RFC 9126 \u00a72) and receives a request_uri.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "endpoint": "par",
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLXBhciIsImV4cCI6MTA2MX0.X16dcchIpidkV2DpVTu_CRSxTW5b4cOEjtYXiSofbhgAzK8ghtfPl-wuj28eA1r99oTkGv0_bGSlO-sNSU4HDw"
+  },
+  "expect": {
+    "ok": true
+  }
+}

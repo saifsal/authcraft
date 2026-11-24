@@ -379,7 +379,7 @@ fn run_token_lifecycle_vector(path: &Path) {
             srv.revoke(
                 &first.access_token,
                 oauth::TokenTypeHint::AccessToken,
-                client_id,
+                client_id, &oauth::ClientAssertion::default(),
                 now_token,
             )
             .unwrap();
@@ -395,7 +395,7 @@ fn run_token_lifecycle_vector(path: &Path) {
             );
         }
         "revoke_refresh" => {
-            srv.revoke(&rt, oauth::TokenTypeHint::RefreshToken, client_id, now_token)
+            srv.revoke(&rt, oauth::TokenTypeHint::RefreshToken, client_id, &oauth::ClientAssertion::default(), now_token)
                 .unwrap();
             assert!(!srv
                 .introspect(&rt, oauth::TokenTypeHint::RefreshToken, now_token)
@@ -525,6 +525,7 @@ fn run_par_vector(path: &Path) {
                 nonce: None,
                 request_uri: None,
             },
+            &oauth::ClientAssertion::default(),
             now_par,
         )
         .unwrap_or_else(|e| panic!("{case}: par: {e}"));
@@ -1053,26 +1054,28 @@ fn run_client_auth_vector(path: &Path) {
         ],
         key,
     );
+    let authorize_request = || AuthorizeRequest {
+        response_type: "code".into(),
+        client_id: client_id.into(),
+        redirect_uri: redirect_uri.into(),
+        code_challenge: pkce::challenge_s256(verifier).unwrap(),
+        code_challenge_method: "S256".into(),
+        state: None,
+        scope: Some("read".into()),
+        nonce: None,
+        request_uri: None,
+    };
     let issue_code = || {
         let pending = srv
-            .begin_authorize(
-                &AuthorizeRequest {
-                    response_type: "code".into(),
-                    client_id: client_id.into(),
-                    redirect_uri: redirect_uri.into(),
-                    code_challenge: pkce::challenge_s256(verifier).unwrap(),
-                    code_challenge_method: "S256".into(),
-                    state: None,
-                    scope: Some("read".into()),
-                    nonce: None,
-                    request_uri: None,
-                },
-                now_auth,
-            )
+            .begin_authorize(&authorize_request(), now_auth)
             .unwrap_or_else(|e| panic!("{case}: {e}"));
         srv.finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
             .unwrap_or_else(|e| panic!("{case}: {e}"))
             .code
+    };
+    let client_auth = oauth::ClientAssertion {
+        client_assertion_type: optional_string(steps, "client_assertion_type").map(str::to_owned),
+        client_assertion: optional_string(steps, "client_assertion").map(str::to_owned),
     };
     let exchange = |code: String| {
         srv.exchange_token(
@@ -1083,9 +1086,8 @@ fn run_client_auth_vector(path: &Path) {
                 client_id: client_id.into(),
                 code_verifier: verifier.into(),
                 refresh_token: String::new(),
-                client_assertion_type: optional_string(steps, "client_assertion_type")
-                    .map(str::to_owned),
-                client_assertion: optional_string(steps, "client_assertion").map(str::to_owned),
+                client_assertion_type: client_auth.client_assertion_type.clone(),
+                client_assertion: client_auth.client_assertion.clone(),
             },
             now_token,
             None,
@@ -1093,13 +1095,32 @@ fn run_client_auth_vector(path: &Path) {
         )
     };
 
-    let mut result = exchange(issue_code());
+    // `Some(token)` when the endpoint was /token and succeeded.
+    let mut result: Result<Option<oauth::TokenSuccess>, OAuthError> =
+        match optional_string(steps, "endpoint").unwrap_or("token") {
+            "token" => exchange(issue_code()).map(Some),
+            "par" => srv
+                .push_authorization(&authorize_request(), &client_auth, now_token)
+                .map(|ok| {
+                    assert!(ok.request_uri.starts_with("urn:ietf:params:oauth:request_uri:"));
+                    None
+                }),
+            "revoke" => srv
+                .revoke(
+                    string(steps, "token"),
+                    oauth::TokenTypeHint::None,
+                    client_id,
+                    &client_auth,
+                    now_token,
+                )
+                .map(|()| None),
+            other => panic!("{case}: unknown endpoint {other}"),
+        };
     if bool_field(steps, "replay_assertion") {
-        result.unwrap_or_else(|e| panic!("{case}: first exchange: {e}"));
-        let second_code = issue_code();
+        result.unwrap_or_else(|e| panic!("{case}: first use: {e}"));
         // Client authentication runs before the code is redeemed, so the replay
         // fails with invalid_client rather than consuming the code.
-        result = exchange(second_code);
+        result = exchange(issue_code()).map(Some);
         assert!(
             matches!(result, Err(OAuthError::InvalidClient)),
             "{case}: replay should fail client auth first"
@@ -1107,7 +1128,9 @@ fn run_client_auth_vector(path: &Path) {
     }
 
     if bool_field(expect, "ok") {
-        let tok = result.unwrap_or_else(|e| panic!("{case}: {e}"));
+        let Some(tok) = result.unwrap_or_else(|e| panic!("{case}: {e}")) else {
+            return;
+        };
         let jwks = Jwks::parse(srv.jwks_document_at(now_token).as_bytes()).unwrap();
         let verified = verify::verify(
             tok.access_token.as_bytes(),

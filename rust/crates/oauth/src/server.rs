@@ -179,6 +179,15 @@ pub struct AuthorizeRequest {
     pub request_uri: Option<String>,
 }
 
+/// RFC 7523 client assertion parameters sent to a back-channel endpoint
+/// (`/par`, `/revoke`) by a `private_key_jwt` client (ADR 0014). Public
+/// clients leave both fields `None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClientAssertion {
+    pub client_assertion_type: Option<String>,
+    pub client_assertion: Option<String>,
+}
+
 /// Token form parameters.
 #[derive(Debug, Clone)]
 pub struct TokenRequest {
@@ -361,26 +370,30 @@ impl AuthorizationServer {
             .cloned()
     }
 
-    /// Token-endpoint client authentication (ADR 0014).
+    /// Back-channel client authentication at `/token`, `/par`, `/revoke` (ADR 0014).
     ///
     /// Public clients must not send a client assertion. `private_key_jwt`
     /// clients must send a valid, unused RFC 7523 assertion. Runs before any
     /// code, refresh token, or DPoP proof is consumed.
-    fn authenticate_client(&self, req: &TokenRequest, now: i64) -> Result<Client, OAuthError> {
-        let client = self.lookup_client(&req.client_id)?;
+    fn authenticate_client(
+        &self,
+        client_id: &str,
+        assertion_type: Option<&str>,
+        assertion: Option<&str>,
+        now: i64,
+    ) -> Result<Client, OAuthError> {
+        let client = self.lookup_client(client_id)?;
         match &client.token_endpoint_auth {
             TokenEndpointAuth::None => {
-                if req.client_assertion_type.is_some() || req.client_assertion.is_some() {
+                if assertion_type.is_some() || assertion.is_some() {
                     return Err(OAuthError::InvalidClient);
                 }
             }
             TokenEndpointAuth::PrivateKeyJwt { jwks } => {
-                if req.client_assertion_type.as_deref() != Some(CLIENT_ASSERTION_TYPE_JWT_BEARER) {
+                if assertion_type != Some(CLIENT_ASSERTION_TYPE_JWT_BEARER) {
                     return Err(OAuthError::InvalidClient);
                 }
-                let assertion = req
-                    .client_assertion
-                    .as_deref()
+                let assertion = assertion
                     .filter(|a| !a.is_empty())
                     .ok_or(OAuthError::InvalidClient)?;
                 let mut cache = self
@@ -884,11 +897,21 @@ impl AuthorizationServer {
     }
 
     /// Pushes authorize parameters and returns a one-time `request_uri` (ADR 0009).
+    ///
+    /// `private_key_jwt` clients authenticate with `client_auth` (RFC 9126 §2,
+    /// ADR 0014) before the parameters are validated.
     pub fn push_authorization(
         &self,
         req: &AuthorizeRequest,
+        client_auth: &ClientAssertion,
         now: i64,
     ) -> Result<ParSuccess, OAuthError> {
+        self.authenticate_client(
+            &req.client_id,
+            client_auth.client_assertion_type.as_deref(),
+            client_auth.client_assertion.as_deref(),
+            now,
+        )?;
         if req.request_uri.is_some() {
             return Err(OAuthError::InvalidRequest);
         }
@@ -1042,7 +1065,12 @@ impl AuthorizationServer {
         dpop_proof: Option<&str>,
         token_htu: &str,
     ) -> Result<TokenSuccess, OAuthError> {
-        self.authenticate_client(req, now)?;
+        self.authenticate_client(
+            &req.client_id,
+            req.client_assertion_type.as_deref(),
+            req.client_assertion.as_deref(),
+            now,
+        )?;
 
         // DPoP (including nonce challenge) before redeem so `use_dpop_nonce`
         // does not consume the authorization code.
@@ -1121,7 +1149,12 @@ impl AuthorizationServer {
         dpop_proof: Option<&str>,
         token_htu: &str,
     ) -> Result<TokenSuccess, OAuthError> {
-        self.authenticate_client(req, now)?;
+        self.authenticate_client(
+            &req.client_id,
+            req.client_assertion_type.as_deref(),
+            req.client_assertion.as_deref(),
+            now,
+        )?;
         if req.refresh_token.is_empty() {
             return Err(OAuthError::InvalidRequest);
         }
@@ -1226,9 +1259,16 @@ impl AuthorizationServer {
         token: &str,
         hint: TokenTypeHint,
         client_id: &str,
+        client_auth: &ClientAssertion,
         now: i64,
     ) -> Result<(), OAuthError> {
-        let _ = self.lookup_client(client_id)?;
+        // RFC 7009 §2.1: confidential clients authenticate (ADR 0014).
+        self.authenticate_client(
+            client_id,
+            client_auth.client_assertion_type.as_deref(),
+            client_auth.client_assertion.as_deref(),
+            now,
+        )?;
         if token.is_empty() {
             return Ok(());
         }
@@ -1619,6 +1659,7 @@ mod tests {
                     nonce: None,
                     request_uri: None,
                 },
+                &ClientAssertion::default(),
                 1_000,
             )
             .unwrap();
@@ -1703,6 +1744,7 @@ mod tests {
                     nonce: None,
                     request_uri: None,
                 },
+                &ClientAssertion::default(),
                 1_000,
             )
             .unwrap();
@@ -1779,7 +1821,7 @@ mod tests {
         srv.revoke(
             &tok.access_token,
             TokenTypeHint::AccessToken,
-            "spa",
+            "spa", &ClientAssertion::default(),
             1_001,
         )
         .unwrap();
@@ -2113,7 +2155,7 @@ mod tests {
                 1_001, None, "https://auth.example/token")
             .unwrap();
         let rt = tok.refresh_token.unwrap();
-        srv.revoke(&rt, TokenTypeHint::RefreshToken, "spa", 1_001)
+        srv.revoke(&rt, TokenTypeHint::RefreshToken, "spa", &ClientAssertion::default(), 1_001)
             .unwrap();
         assert!(!srv
             .introspect(&rt, TokenTypeHint::RefreshToken, 1_001)
@@ -2216,9 +2258,25 @@ mod tests {
             Err(OAuthError::InvalidClient)
         );
         let good2 = client_assertion(&key, "https://auth.example", "j2", 1_060);
-        assert!(srv
+        let rt = srv
             .exchange_token(&req(Some(good2), "refresh_token", rt), 1_002, None, htu)
-            .is_ok());
+            .unwrap()
+            .refresh_token
+            .unwrap();
+
+        // RFC 7009: revocation needs client authentication too.
+        assert_eq!(
+            srv.revoke(&rt, TokenTypeHint::RefreshToken, "svc", &ClientAssertion::default(), 1_003),
+            Err(OAuthError::InvalidClient)
+        );
+        assert!(srv.introspect(&rt, TokenTypeHint::RefreshToken, 1_003).unwrap().active);
+        let auth = ClientAssertion {
+            client_assertion_type: Some(CLIENT_ASSERTION_TYPE_JWT_BEARER.into()),
+            client_assertion: Some(client_assertion(&key, "https://auth.example", "j3", 1_060)),
+        };
+        srv.revoke(&rt, TokenTypeHint::RefreshToken, "svc", &auth, 1_003)
+            .unwrap();
+        assert!(!srv.introspect(&rt, TokenTypeHint::RefreshToken, 1_003).unwrap().active);
     }
 
     #[test]

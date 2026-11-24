@@ -1,0 +1,21 @@
+{
+  "id": "neg-par-assertion-replayed-at-token",
+  "source": "generated",
+  "description": "An assertion accepted at /par cannot be replayed at /token: jti is single-use across endpoints.",
+  "steps": {
+    "client_id": "svc",
+    "redirect_uri": "https://svc.example/cb",
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "endpoint": "par",
+    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    "client_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzctYTIifQ.eyJpc3MiOiJzdmMiLCJzdWIiOiJzdmMiLCJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImp0aSI6ImNhLXBhciIsImV4cCI6MTA2MX0.X16dcchIpidkV2DpVTu_CRSxTW5b4cOEjtYXiSofbhgAzK8ghtfPl-wuj28eA1r99oTkGv0_bGSlO-sNSU4HDw",
+    "replay_assertion": true
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_client"
+  }
+}

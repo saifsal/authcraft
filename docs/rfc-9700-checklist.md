@@ -17,7 +17,7 @@ Educational mapping of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)
 | Sender-constrained access tokens (DPoP) | partial | Optional DPoP (ADR 0009); Bearer still allowed |
 | Pushed Authorization Requests | partial | Optional PAR; `require_par` available (ADR 0009) |
 | Mix-up mitigation (`iss` on AS responses) | done | RFC 9207 `iss` on authorize success redirects |
-| Confidential clients / client auth | partial | `private_key_jwt` at `/token` (ADR 0014); not yet at `/par`, `/revoke`, `/introspect` |
+| Confidential clients / client auth | partial | `private_key_jwt` at `/token`, `/par`, `/revoke` (ADR 0014); `/introspect` unauthenticated |
 | PAR required for public clients | partial | `ServerConfig.require_par` (demo default false) |
 | DPoP nonce from AS | done | `use_dpop_nonce` + `DPoP-Nonce` header (ADR 0009 B5) |
 | Real resource-owner authentication | done | Argon2id + optional TOTP/WebAuthn 2FA (M5); stub login removed |

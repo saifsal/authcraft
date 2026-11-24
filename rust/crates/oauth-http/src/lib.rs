@@ -14,7 +14,7 @@ use axum::{Json, Router};
 use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, DirectoryBind, DynamicClientRequest,
+    AuthorizationServer, AuthorizeRequest, Client, ClientAssertion, DirectoryBind, DynamicClientRequest,
     LoginSubject, OAuthError, OidcRpConfig, PendingAuthorization, ServerConfig, TokenRequest,
     TokenEndpointAuth, TokenTypeHint, DEMO_ADMIN_TOKEN,
 };
@@ -470,6 +470,8 @@ pub struct ParForm {
     pub state: Option<String>,
     pub scope: Option<String>,
     pub nonce: Option<String>,
+    pub client_assertion_type: Option<String>,
+    pub client_assertion: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -524,12 +526,19 @@ async fn par(State(state): State<AppState>, Form(form): Form<ParForm>) -> Respon
         nonce: form.nonce,
         request_uri: None,
     };
-    match state.server.push_authorization(&req, now_unix()) {
+    let client_auth = ClientAssertion {
+        client_assertion_type: form.client_assertion_type,
+        client_assertion: form.client_assertion,
+    };
+    match state.server.push_authorization(&req, &client_auth, now_unix()) {
         Ok(ok) => Json(serde_json::json!({
             "request_uri": ok.request_uri,
             "expires_in": ok.expires_in,
         }))
         .into_response(),
+        Err(err @ (OAuthError::InvalidClient | OAuthError::UnauthorizedClient)) => {
+            token_error(err)
+        }
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": err.code() })),
@@ -1331,17 +1340,29 @@ pub struct RevokeForm {
     pub token: Option<String>,
     pub token_type_hint: Option<String>,
     pub client_id: Option<String>,
+    pub client_assertion_type: Option<String>,
+    pub client_assertion: Option<String>,
 }
 
 async fn revoke(State(state): State<AppState>, Form(form): Form<RevokeForm>) -> Response {
     let client_id = form.client_id.unwrap_or_default();
     let token = form.token.unwrap_or_default();
     let hint = TokenTypeHint::parse(form.token_type_hint.as_deref());
-    // RFC 7009: always 200 for the client when the request is authorized.
-    let _ = state
+    let client_auth = ClientAssertion {
+        client_assertion_type: form.client_assertion_type,
+        client_assertion: form.client_assertion,
+    };
+    // RFC 7009 §2.2: 200 once the client is authenticated, whether or not the
+    // token was valid; client authentication failures are `invalid_client`.
+    match state
         .server
-        .revoke(&token, hint, &client_id, now_unix());
-    StatusCode::OK.into_response()
+        .revoke(&token, hint, &client_id, &client_auth, now_unix())
+    {
+        Err(err @ (OAuthError::InvalidClient | OAuthError::UnauthorizedClient)) => {
+            token_error(err)
+        }
+        _ => StatusCode::OK.into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -29,6 +29,10 @@ pub enum AuthnError {
     InvalidMfa,
     /// Too many failed second-factor attempts; retry later (ADR 0022).
     TooManyAttempts,
+    /// Correct password, but the email address is not verified (ADR 0024).
+    EmailNotVerified,
+    /// The account store could not be written (ADR 0024).
+    StorageUnavailable,
 }
 
 impl AuthnError {
@@ -38,6 +42,8 @@ impl AuthnError {
             AuthnError::MfaRequired => "mfa_required",
             AuthnError::InvalidMfa => "invalid_mfa",
             AuthnError::TooManyAttempts => "too_many_attempts",
+            AuthnError::EmailNotVerified => "email_not_verified",
+            AuthnError::StorageUnavailable => "temporarily_unavailable",
         }
     }
 }
@@ -50,13 +56,26 @@ impl fmt::Display for AuthnError {
 
 impl std::error::Error for AuthnError {}
 
+/// Persistent account storage (ADR 0024). The server keeps every account in
+/// memory and writes each change through this trait before applying it, so a
+/// failed write leaves memory unchanged.
+pub trait UserRepository: Send + Sync {
+    /// Inserts or replaces the account stored under `username`.
+    fn save(&self, username: &str, record: &UserRecord) -> Result<(), String>;
+    /// Removes the account stored under `username` (no error if absent).
+    fn delete(&self, username: &str) -> Result<(), String>;
+}
+
 /// Stored account record.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UserRecord {
     pub subject: String,
     pub user_handle: Uuid,
     pub name: Option<String>,
     pub email: Option<String>,
+    /// Whether `email` was verified (ADR 0024). Unverified accounts cannot
+    /// log in; the flag is the `email_verified` claim.
+    pub email_verified: bool,
     /// PHC-encoded Argon2id hash.
     pub password_hash: String,
     /// TOTP secret (base32) when enrolled.
@@ -148,6 +167,7 @@ impl UserStore {
                 user_handle: DEMO_ALICE_UUID,
                 name: Some("Alice".into()),
                 email: Some("alice@example.com".into()),
+                email_verified: true,
                 password_hash: hash,
                 totp_secret: None,
                 webauthn_credentials: Vec::new(),
@@ -189,7 +209,20 @@ impl UserStore {
             return Err(AuthnError::InvalidCredentials);
         };
         verify_password(password, &user.password_hash)?;
+        // Checked after the password, so only someone who knows it learns
+        // that the account exists and is unverified.
+        if !user.email_verified {
+            return Err(AuthnError::EmailNotVerified);
+        }
         Ok(user.login_subject())
+    }
+
+    /// The account whose OIDC `sub` is `subject`.
+    pub fn get_by_subject(&self, subject: &str) -> Option<(&str, &UserRecord)> {
+        self.users
+            .iter()
+            .find(|(_, u)| u.subject == subject)
+            .map(|(name, u)| (name.as_str(), u))
     }
 
     pub fn set_totp_secret(&mut self, username: &str, secret_b32: String) -> Result<(), AuthnError> {

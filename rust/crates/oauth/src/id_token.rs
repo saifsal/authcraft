@@ -22,6 +22,8 @@ pub struct IdTokenClaims<'a> {
     pub exp: i64,
     pub name: Option<&'a str>,
     pub email: Option<&'a str>,
+    /// OIDC `email_verified`, emitted with `email` when known (ADR 0024).
+    pub email_verified: Option<bool>,
 }
 
 /// OIDC Core §3.1.3.6 `at_hash` for EdDSA (SHA-256, left 128 bits, base64url).
@@ -54,6 +56,9 @@ pub fn mint_id_token(
     }
     if let Some(email) = claims.email {
         payload.push_str(&format!(r#","email":"{}""#, json_escape(email)));
+        if let Some(v) = claims.email_verified {
+            payload.push_str(&format!(r#","email_verified":{v}"#));
+        }
     }
     payload.push('}');
 

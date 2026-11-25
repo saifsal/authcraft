@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod store;
 pub mod tls;
 
 use std::collections::HashMap;
@@ -1080,11 +1081,18 @@ async fn login_post(
         .authenticate_password(&username, &form.password)
     {
         Ok(login) => login,
-        Err(_) => {
+        Err(err) => {
+            let message = match err {
+                oauth::AuthnError::EmailNotVerified => {
+                    "Verify your email address first: follow the link we sent you."
+                }
+                oauth::AuthnError::StorageUnavailable => "Temporarily unavailable; try again.",
+                _ => "Invalid username or password",
+            };
             return (
                 StatusCode::UNAUTHORIZED,
                 login_page(
-                    Some("Invalid username or password"),
+                    Some(message),
                     state.oidc_rp.is_some(),
                     state.directory.is_some(),
                 ),
@@ -1543,6 +1551,9 @@ async fn userinfo(
             }
             if let Some(email) = info.email {
                 body["email"] = serde_json::Value::String(email);
+                if let Some(v) = info.email_verified {
+                    body["email_verified"] = serde_json::Value::Bool(v);
+                }
             }
             Json(body).into_response()
         }

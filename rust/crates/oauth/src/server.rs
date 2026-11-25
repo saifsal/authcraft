@@ -26,7 +26,7 @@ use crate::refresh::{RefreshStore, DEFAULT_REFRESH_TOKEN_TTL_SECS};
 use crate::token::{self, TokenClaims, DEFAULT_ACCESS_TOKEN_TTL_SECS};
 use crate::scim::{self, ScimUser};
 use crate::totp;
-use crate::users::{AuthnError, UserRecord, UserStore};
+use crate::users::{AuthnError, UserRecord, UserRepository, UserStore};
 use crate::webauthn_mfa::WebauthnMfa;
 use uuid::Uuid;
 use webauthn_rs::prelude::{
@@ -242,6 +242,7 @@ pub struct UserInfo {
     pub sub: String,
     pub name: Option<String>,
     pub email: Option<String>,
+    pub email_verified: Option<bool>,
 }
 
 /// RFC 7662 introspection result.
@@ -301,6 +302,8 @@ pub enum AdminError {
     NotFound,
     Conflict,
     InvalidRequest,
+    /// The account store could not be written (ADR 0024).
+    Unavailable,
 }
 
 impl AdminError {
@@ -310,6 +313,7 @@ impl AdminError {
             AdminError::NotFound => "not_found",
             AdminError::Conflict => "conflict",
             AdminError::InvalidRequest => "invalid_request",
+            AdminError::Unavailable => "temporarily_unavailable",
         }
     }
 }
@@ -350,6 +354,8 @@ pub struct AuthorizationServer {
     webauthn: WebauthnMfa,
     /// Second-factor throttling and TOTP replay state (ADR 0022).
     mfa_guard: Mutex<MfaGuard>,
+    /// Persistent account storage, when attached (ADR 0024).
+    user_repo: std::sync::OnceLock<std::sync::Arc<dyn UserRepository>>,
 }
 
 /// Failed second-factor attempts before [`MFA_LOCKOUT_SECS`] applies.
@@ -386,6 +392,7 @@ impl AuthorizationServer {
             users: Mutex::new(UserStore::new()),
             webauthn,
             mfa_guard: Mutex::new(MfaGuard::default()),
+            user_repo: std::sync::OnceLock::new(),
         }
     }
 
@@ -644,6 +651,8 @@ impl AuthorizationServer {
             return Err(AdminError::Conflict);
         }
         let scim_user = ScimUser::from_record(&input.user_name, &record);
+        self.store_user(&input.user_name, &record)
+            .map_err(|_| AdminError::Unavailable)?;
         users.insert(input.user_name, record);
         Ok(scim_user)
     }
@@ -699,7 +708,11 @@ impl AuthorizationServer {
         }
         let record = scim::build_user_record(&input, Some(&existing))?;
         let scim_user = ScimUser::from_record(&input.user_name, &record);
+        self.store_user(&input.user_name, &record)
+            .map_err(|_| AdminError::Unavailable)?;
         if input.user_name != old_name {
+            self.unstore_user(&old_name)
+                .map_err(|_| AdminError::Unavailable)?;
             users.remove(&old_name);
         }
         users.insert(input.user_name, record);
@@ -718,16 +731,87 @@ impl AuthorizationServer {
             .username_for_handle(uuid)
             .ok_or(AdminError::NotFound)?
             .to_owned();
+        self.unstore_user(&name).map_err(|_| AdminError::Unavailable)?;
         users.remove(&name);
         Ok(())
     }
 
-    /// Insert or replace a user account (ADR 0010).
-    pub fn upsert_user(&self, username: impl Into<String>, record: UserRecord) {
+    /// Attaches persistent account storage and loads `existing` accounts
+    /// (ADR 0024). Can be called once; later account changes are written
+    /// through `repo` before they are applied in memory.
+    pub fn attach_user_repository(
+        &self,
+        repo: std::sync::Arc<dyn UserRepository>,
+        existing: Vec<(String, UserRecord)>,
+    ) -> Result<(), &'static str> {
+        let mut users = self.users.lock().expect("users lock");
+        self.user_repo
+            .set(repo)
+            .map_err(|_| "user repository already attached")?;
+        for (name, record) in existing {
+            users.insert(name, record);
+        }
+        Ok(())
+    }
+
+    /// Writes `record` through the repository, if one is attached.
+    fn store_user(&self, username: &str, record: &UserRecord) -> Result<(), ()> {
+        match self.user_repo.get() {
+            Some(repo) => repo.save(username, record).map_err(|_| ()),
+            None => Ok(()),
+        }
+    }
+
+    /// Removes `username` from the repository, if one is attached.
+    fn unstore_user(&self, username: &str) -> Result<(), ()> {
+        match self.user_repo.get() {
+            Some(repo) => repo.delete(username).map_err(|_| ()),
+            None => Ok(()),
+        }
+    }
+
+    /// Applies `change` to a copy of `username`'s record, stores the copy,
+    /// then replaces the in-memory record. Nothing changes if storing fails.
+    fn update_user<T>(
+        &self,
+        username: &str,
+        change: impl FnOnce(&mut UserRecord) -> Result<T, AuthnError>,
+    ) -> Result<T, AuthnError> {
+        let username = username.trim();
+        let mut users = self.users.lock().expect("users lock");
+        let mut record = users
+            .get(username)
+            .cloned()
+            .ok_or(AuthnError::InvalidCredentials)?;
+        let out = change(&mut record)?;
+        self.store_user(username, &record)
+            .map_err(|_| AuthnError::StorageUnavailable)?;
+        users.insert(username.to_owned(), record);
+        Ok(out)
+    }
+
+    /// `email_verified` for a local account by OIDC `sub`; `None` for
+    /// subjects that are not local accounts (federated, LDAP).
+    fn email_verified_for(&self, subject: &str) -> Option<bool> {
         self.users
             .lock()
             .expect("users lock")
-            .insert(username, record);
+            .get_by_subject(subject)
+            .map(|(_, u)| u.email_verified)
+    }
+
+    /// Insert or replace a user account (ADR 0010).
+    pub fn upsert_user(
+        &self,
+        username: impl Into<String>,
+        record: UserRecord,
+    ) -> Result<(), AuthnError> {
+        let username = username.into();
+        let mut users = self.users.lock().expect("users lock");
+        self.store_user(&username, &record)
+            .map_err(|_| AuthnError::StorageUnavailable)?;
+        users.insert(username, record);
+        Ok(())
     }
 
     /// Seed the published demo user `alice`.
@@ -775,10 +859,11 @@ impl AuthorizationServer {
         let secret = totp::generate_secret()?;
         let secret_b32 = totp::encode_base32(&secret);
         let otpauth_uri = totp::otpauth_uri(issuer, username.trim(), &secret_b32);
-        self.users
-            .lock()
-            .expect("users lock")
-            .set_totp_secret(username, secret_b32.clone())?;
+        let stored = secret_b32.clone();
+        self.update_user(username, |u| {
+            u.totp_secret = Some(stored);
+            Ok(())
+        })?;
         Ok(TotpEnrollment {
             secret_b32,
             otpauth_uri,
@@ -787,10 +872,10 @@ impl AuthorizationServer {
 
     /// Set a known TOTP secret (tests / vectors).
     pub fn set_totp_secret(&self, username: &str, secret_b32: &str) -> Result<(), AuthnError> {
-        self.users
-            .lock()
-            .expect("users lock")
-            .set_totp_secret(username, secret_b32.to_owned())
+        self.update_user(username, |u| {
+            u.totp_secret = Some(secret_b32.to_owned());
+            Ok(())
+        })
     }
 
     /// Verify a TOTP code for `username` at `now`.
@@ -876,12 +961,10 @@ impl AuthorizationServer {
         reg: &RegisterPublicKeyCredential,
     ) -> Result<(), AuthnError> {
         let sk = self.webauthn.finish_registration(username.trim(), reg)?;
-        let mut users = self.users.lock().expect("users lock");
-        let user = users
-            .get_mut(username.trim())
-            .ok_or(AuthnError::InvalidCredentials)?;
-        user.webauthn_credentials.push(sk);
-        Ok(())
+        self.update_user(username, |u| {
+            u.webauthn_credentials.push(sk);
+            Ok(())
+        })
     }
 
     pub fn webauthn_start_authentication(
@@ -905,12 +988,15 @@ impl AuthorizationServer {
         username: &str,
         auth: &PublicKeyCredential,
     ) -> Result<(), AuthnError> {
-        let mut users = self.users.lock().expect("users lock");
-        let user = users
-            .get_mut(username.trim())
-            .ok_or(AuthnError::InvalidMfa)?;
-        self.webauthn
-            .finish_authentication(session_key, auth, &mut user.webauthn_credentials)
+        // The authenticator counter changes on success, so it is stored too.
+        self.update_user(username, |u| {
+            self.webauthn
+                .finish_authentication(session_key, auth, &mut u.webauthn_credentials)
+        })
+        .map_err(|e| match e {
+            AuthnError::InvalidCredentials => AuthnError::InvalidMfa,
+            other => other,
+        })
     }
 
     pub fn public_key(&self) -> PublicKey {
@@ -1092,6 +1178,7 @@ impl AuthorizationServer {
                 scope,
                 name,
                 email,
+                email_verified: email.and(self.email_verified_for(subject)),
                 cnf_jkt,
                 cnf_x5t_s256,
                 iat: now,
@@ -1434,6 +1521,10 @@ impl AuthorizationServer {
                     exp,
                     name: record.name.as_deref(),
                     email: record.email.as_deref(),
+                    email_verified: record
+                        .email
+                        .as_ref()
+                        .and(self.email_verified_for(&record.subject)),
                 },
             )?)
         } else {
@@ -1605,7 +1696,16 @@ impl AuthorizationServer {
             .get("email")
             .and_then(|v| v.as_str())
             .map(str::to_owned);
-        Ok(UserInfo { sub, name, email })
+        let email_verified = claims.get("email_verified").and_then(|v| match v {
+            jose::json::Value::Bool(b) => Some(*b),
+            _ => None,
+        });
+        Ok(UserInfo {
+            sub,
+            name,
+            email,
+            email_verified,
+        })
     }
 
     /// RFC 7009 revoke. Unknown tokens succeed (caller maps to HTTP 200).

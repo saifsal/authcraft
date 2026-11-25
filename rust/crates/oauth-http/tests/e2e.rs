@@ -506,6 +506,10 @@ async fn openid_flow_id_token_and_userinfo() {
         id_verified.claims.get("at_hash").and_then(|v| v.as_str()),
         Some(id_token::at_hash_eddsa(&access_token).as_str())
     );
+    assert!(
+        matches!(id_verified.claims.get("email_verified"), Some(jose::json::Value::Bool(true))),
+        "ID token carries email_verified for a verified account"
+    );
 
     let res = app
         .oneshot(
@@ -522,6 +526,7 @@ async fn openid_flow_id_token_and_userinfo() {
     assert!(info.contains("\"sub\":\"alice\""));
     assert!(info.contains("\"name\":\"Alice\""));
     assert!(info.contains("\"email\":\"alice@example.com\""));
+    assert!(info.contains("\"email_verified\":true"), "{info}");
 }
 
 fn now_unix() -> i64 {

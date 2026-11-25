@@ -840,6 +840,7 @@ fn run_authn_vector(path: &Path) {
     srv.upsert_user(
         username,
         UserRecord {
+            email_verified: true,
             subject: subject.into(),
             user_handle: uuid::Uuid::new_v4(),
             name: optional_string(steps, "name").map(str::to_owned),
@@ -848,7 +849,8 @@ fn run_authn_vector(path: &Path) {
             totp_secret: None,
             webauthn_credentials: Vec::new(),
         },
-    );
+    )
+    .unwrap();
 
     match optional_string(steps, "action").unwrap_or("password") {
         "password" => {

@@ -20,8 +20,10 @@ In scope:
 
 Assumptions:
 
-- **A1.** One process holds all state in memory. A restart forgets users,
-  clients, codes, tokens, and signing keys.
+- **A1.** One process. In production, accounts (SQLite) and the signing key
+  (a 0600 file) persist in the data directory (ADR 0023, 0024); codes,
+  refresh families, caches, and the revocation denylist are in memory and a
+  restart forgets them. `--demo` keeps everything in memory.
 - **A2.** The demo binds to `127.0.0.1`. Nothing here is deployed on a
   network.
 - **A3.** The host and the process are trusted. An attacker with code

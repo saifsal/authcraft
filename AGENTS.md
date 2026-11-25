@@ -39,7 +39,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── 0020-redirect-uri-registration.md # https / loopback / private-use schemes only
 │   │   ├── 0021-http-security-headers.md  # framing, referrer, no-store, HSTS
 │   │   ├── 0022-second-factor-throttling.md # TOTP lockout + replay protection
-│   │   └── 0023-production-mode.md        # --demo vs production, clients file, key file
+│   │   ├── 0023-production-mode.md        # --demo vs production, clients file, key file
+│   │   └── 0024-persistent-accounts.md    # SQLite accounts, email_verified
 │   ├── rfc-conformance.md                 # scope map per milestone
 │   ├── rfc-9700-checklist.md              # OAuth security BCP status
 │   ├── threat-model.md                    # assets, adversaries, mitigations, residual risks
@@ -89,11 +90,12 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │       ├── vectors.rs                 # runs every OAuth testvectors/ directory
 │   │       └── attack_harness.rs          # protocol attack negatives (ADR 0013)
 │   ├── crates/oauth-http/
-│   │   ├── Cargo.toml                     # Axum binary + lib; depends on oauth, jose
+│   │   ├── Cargo.toml                     # Axum binary + lib; oauth, jose, rusqlite (bundled), clap
 │   │   ├── src/main.rs                    # binds 127.0.0.1:8089; HTTPS when AUTHCRAFT_TLS_* set
 │   │   ├── src/lib.rs                     # HTTP routes for every endpoint
 │   │   ├── src/tls.rs                     # rustls listener, optional client certs (ADR 0017)
 │   │   ├── src/config.rs                  # clients file, signing-key file, secrets (ADR 0023)
+│   │   ├── src/store.rs                   # SQLite account repository (ADR 0024)
 │   │   ├── tests/e2e.rs                   # authorize → login → token → jose verify
 │   │   ├── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
 │   │   └── tests/mtls.rs                  # self-signed mTLS + bound tokens over real TLS

@@ -10,6 +10,8 @@ name = "oauth-http"
 path = "src/main.rs"
 
 [dependencies]
+# Account storage (ADR 0024); bundled so CI and the VPS need no SQLite headers.
+rusqlite = { version = "0.37", features = ["bundled"] }
 clap = { version = "4", features = ["derive", "env"] }
 oauth = { path = "../oauth" }
 jose = { path = "../jose" }
@@ -30,6 +32,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "service"] }
 
 [dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

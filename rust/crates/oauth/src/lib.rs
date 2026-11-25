@@ -40,4 +40,4 @@ pub use federation::{
     id_token_from_token_response, login_subject_from_id_token, start_oidc_login, DirectoryBind,
     MemoryDirectory, MemoryDirectoryUser, OidcRpConfig, OidcRpError, OidcRpStart,
 };
-pub use users::{hash_password, AuthnError, UserRecord, UserStore, DEMO_ALICE_PASSWORD};
+pub use users::{hash_password, AuthnError, UserRecord, UserRepository, UserStore, DEMO_ALICE_PASSWORD};

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use oauth::ServerConfig;
-use oauth_http::{app, config, tls, AppState};
+use oauth_http::{app, config, store, tls, AppState};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
@@ -79,6 +79,11 @@ fn production_state(args: &Args, data_dir: &PathBuf, public_url: &str) -> Result
     };
     let mut state = AppState::production(server_config, clients, signing)?;
     state.secure_cookies = args.secure_cookies;
+    // ADR 0024: accounts live in SQLite in the data directory.
+    let store = Arc::new(store::SqliteUserStore::open(&data_dir.join("authcraft.db"))?);
+    let existing = store.load_all()?;
+    tracing::info!("loaded {} account(s)", existing.len());
+    state.server.attach_user_repository(store, existing)?;
     Ok(state)
 }
 

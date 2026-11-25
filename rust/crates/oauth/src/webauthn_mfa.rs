@@ -141,6 +141,7 @@ mod tests {
         srv.upsert_user(
             "alice",
             UserRecord {
+                email_verified: true,
                 subject: "alice".into(),
                 user_handle: DEMO_ALICE_UUID,
                 name: Some("Alice".into()),
@@ -149,7 +150,8 @@ mod tests {
                 totp_secret: None,
                 webauthn_credentials: Vec::new(),
             },
-        );
+        )
+    .unwrap();
 
         let mut token = SoftPasskey::new(true);
         let origin = Url::parse("http://localhost:8089").unwrap();

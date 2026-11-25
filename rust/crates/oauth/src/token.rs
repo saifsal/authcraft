@@ -19,6 +19,8 @@ pub struct TokenClaims<'a> {
     pub scope: Option<&'a str>,
     pub name: Option<&'a str>,
     pub email: Option<&'a str>,
+    /// OIDC `email_verified`, emitted with `email` when known (ADR 0024).
+    pub email_verified: Option<bool>,
     /// RFC 9449 confirmation thumbprint when DPoP-bound.
     pub cnf_jkt: Option<&'a str>,
     /// RFC 8705 certificate thumbprint when mTLS-bound (ADR 0017).
@@ -53,6 +55,9 @@ pub fn mint_access_token(
     }
     if let Some(email) = claims.email {
         payload.push_str(&format!(r#","email":"{}""#, json_escape(email)));
+        if let Some(v) = claims.email_verified {
+            payload.push_str(&format!(r#","email_verified":{v}"#));
+        }
     }
     let mut cnf = Vec::new();
     if let Some(jkt) = claims.cnf_jkt {

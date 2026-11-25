@@ -144,6 +144,8 @@ pub fn build_user_record(input: &ScimUserInput, existing: Option<&UserRecord>) -
             .unwrap_or_else(Uuid::new_v4),
         name: input.display_name.clone(),
         email: input.email.clone(),
+        // An administrator vouches for addresses set through SCIM.
+        email_verified: input.email.is_some(),
         password_hash,
         totp_secret: existing.and_then(|e| e.totp_secret.clone()),
         webauthn_credentials: existing

@@ -145,7 +145,10 @@ residual risk), or **open** (worth fixing).
 | Online TOTP brute force | Per-user lockout after 5 failures for 300 s (ADR 0022; `neg-totp-locked`) | mitigated |
 | TOTP code replay | A time step already accepted is refused (ADR 0022; `neg-totp-replay`) | mitigated |
 | WebAuthn phishing | Origin- and RP-ID-bound assertions through `webauthn-rs` (ADR 0010) | mitigated |
-| Online password guessing | No password throttling | open (see R3) |
+| Online password guessing | 10 failures per account and 50 attempts per client address per 15 min (ADR 0025; `tests/accounts.rs`) | mitigated |
+| Account enumeration through sign-up or recovery | Identical responses for every address; notices by email (ADR 0025) | mitigated |
+| Pre-registration of someone else's address | Password and name apply only when the verify link is used (ADR 0025) | mitigated |
+| Email link theft or replay | 256-bit single-use tokens stored hashed; 24 h / 30 min; GET does not consume (ADR 0025) | mitigated |
 | Federated login (OIDC RP) code or ID token injection | Upstream flow uses PKCE S256, `state`, `nonce`; ID token checked for `iss` and `aud` (ADR 0012) | mitigated |
 
 ### Administration and control plane
@@ -184,9 +187,11 @@ Ordered by how much each one matters if the code were reused.
   with no client expiry, this enables consent phishing under a chosen
   `client_name` and memory growth. Production servers usually require an
   initial access token (RFC 7591 §3).
-- **R3. No rate limiting.** Password attempts are unthrottled, and each one
-  costs an Argon2id hash. TOTP is locked out (ADR 0022); passwords and the
-  endpoints in general are not.
+- **R3. Rate limiting is partial.** Logins (per account and client address),
+  sign-up, recovery, and mail are limited (ADR 0025), and TOTP is locked out
+  (ADR 0022). The OAuth endpoints themselves (`/token`, `/par`, `/authorize`)
+  are not rate-limited, and an attacker who knows an address can lock its
+  password login for up to 15 minutes.
 - **R4. Demo secrets.** `DEMO_ADMIN_TOKEN` and the demo password for `alice`
   are published constants. Since ADR 0023 they exist only under `--demo`;
   production refuses the demo admin token and seeds no users.

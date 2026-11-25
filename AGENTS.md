@@ -40,7 +40,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── 0021-http-security-headers.md  # framing, referrer, no-store, HSTS
 │   │   ├── 0022-second-factor-throttling.md # TOTP lockout + replay protection
 │   │   ├── 0023-production-mode.md        # --demo vs production, clients file, key file
-│   │   └── 0024-persistent-accounts.md    # SQLite accounts, email_verified
+│   │   ├── 0024-persistent-accounts.md    # SQLite accounts, email_verified
+│   │   └── 0025-self-service-accounts.md  # sign-up, verify, reset, throttling (from glossa)
 │   ├── rfc-conformance.md                 # scope map per milestone
 │   ├── rfc-9700-checklist.md              # OAuth security BCP status
 │   ├── threat-model.md                    # assets, adversaries, mitigations, residual risks
@@ -95,10 +96,14 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── src/lib.rs                     # HTTP routes for every endpoint
 │   │   ├── src/tls.rs                     # rustls listener, optional client certs (ADR 0017)
 │   │   ├── src/config.rs                  # clients file, signing-key file, secrets (ADR 0023)
-│   │   ├── src/store.rs                   # SQLite account repository (ADR 0024)
+│   │   ├── src/store.rs                   # SQLite: users, auth_tokens, outbox (ADR 0024/0025)
+│   │   ├── src/accounts.rs                # sign-up / verify / reset flows + pages (ADR 0025)
+│   │   ├── src/mailer.rs                  # outbox + Resend worker (ported from glossa)
+│   │   ├── src/ratelimit.rs, src/pages.rs # fixed-window limits; shared HTML layout
 │   │   ├── tests/e2e.rs                   # authorize → login → token → jose verify
 │   │   ├── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
-│   │   └── tests/mtls.rs                  # self-signed mTLS + bound tokens over real TLS
+│   │   ├── tests/mtls.rs                  # self-signed mTLS + bound tokens over real TLS
+│   │   └── tests/accounts.rs              # sign-up → verify → code; reset; throttling
 │   └── fuzz/                              # cargo-fuzz targets (own Cargo.lock; not in workspace)
 │       └── fuzz_targets/                  # b64url_decode, json_parse, jose_verify, pkce_challenge
 ├── zig/

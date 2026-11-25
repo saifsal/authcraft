@@ -2,7 +2,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod accounts;
 pub mod config;
+pub mod mailer;
+pub mod pages;
+pub mod ratelimit;
 pub mod store;
 pub mod tls;
 
@@ -54,12 +58,22 @@ pub struct AppState {
     /// Mark cookies `Secure` even on plain HTTP, for a TLS-terminating
     /// reverse proxy in front (ADR 0023).
     pub secure_cookies: bool,
+    /// Sign-up, verification, reset, and login throttling (ADR 0025).
+    pub accounts: accounts::Accounts,
+    /// Demo mode: show the published demo credentials on the login page.
+    pub demo: bool,
 }
 
 impl AppState {
     pub fn new(config: ServerConfig, clients: Vec<Client>, signing: SigningKey) -> Self {
+        let issuer = config.issuer.clone();
+        let server = Arc::new(AuthorizationServer::new(config, clients, signing));
+        // Link tokens and the outbox; production swaps in the on-disk database.
+        let db = store::open_db(std::path::Path::new(":memory:")).expect("in-memory database");
         Self {
-            server: Arc::new(AuthorizationServer::new(config, clients, signing)),
+            accounts: accounts::Accounts::new(server.clone(), db, &issuer),
+            demo: false,
+            server,
             pending: Arc::new(Mutex::new(HashMap::new())),
             mfa_pending: Arc::new(Mutex::new(HashMap::new())),
             oidc_rp: None,
@@ -130,7 +144,19 @@ impl AppState {
             key,
         );
         state.server.seed_demo_users();
-        state
+        Self { demo: true, ..state }
+    }
+
+    /// Uses `db` for account storage, link tokens, and the outbox
+    /// (production, ADR 0024 / 0025): attaches the account repository and
+    /// rebuilds [`accounts::Accounts`] on the same database.
+    pub fn with_database(mut self, db: store::Db) -> Result<Self, config::ConfigError> {
+        let repo = Arc::new(store::SqliteUserStore::from_db(db.clone()));
+        let existing = repo.load_all()?;
+        tracing::info!("loaded {} account(s)", existing.len());
+        self.server.attach_user_repository(repo, existing)?;
+        self.accounts = accounts::Accounts::new(self.server.clone(), db, &self.server.config.issuer);
+        Ok(self)
     }
 }
 
@@ -198,6 +224,7 @@ pub fn app(state: AppState) -> Router {
                 .put(scim_replace_user)
                 .delete(scim_delete_user),
         )
+        .merge(accounts::routes())
         .with_state(state)
         .layer(axum::middleware::from_fn(security_headers))
 }
@@ -755,46 +782,52 @@ async fn par(
     }
 }
 
-fn login_page(error: Option<&str>, oidc_enabled: bool, ldap_enabled: bool) -> Html<String> {
-    let err = error
-        .map(|e| format!("<p style=\"color:red\">{e}</p>"))
-        .unwrap_or_default();
-    let oidc = if oidc_enabled {
-        r#"<p><a href="/login/oidc/start">Sign in with upstream OpenID Provider</a></p>"#
+/// The sign-in page (ADR 0025). Demo credentials are shown only in demo mode.
+fn login_page(state: &AppState, error: Option<&str>, username: &str) -> Html<String> {
+    let demo = if state.demo {
+        r#"<p class="muted">Demo server: sign in as <code>alice</code> / <code>password</code>.</p>"#
     } else {
         ""
     };
-    let ldap = if ldap_enabled {
-        r#"
-  <h2>Directory (LDAP gateway)</h2>
-  <form method="post" action="/login/ldap">
-    <label>Username <input name="username" /></label>
-    <label>Password <input name="password" type="password" /></label>
-    <button type="submit">Sign in via directory</button>
-  </form>"#
+    let oidc = if state.oidc_rp.is_some() {
+        r#"<p><a href="/login/oidc/start">Sign in with the upstream OpenID provider</a></p>"#
     } else {
         ""
     };
-    Html(format!(
-        r#"<!doctype html>
-<html><head><title>authcraft login</title></head>
-<body>
-  <h1>Login</h1>
-  <p>Educational Argon2id passwords (ADR 0010). Demo user <code>alice</code> / <code>password</code>.</p>
-  {err}
-  <form method="post" action="/login">
-    <label>Username <input name="username" value="alice" autocomplete="username" /></label>
-    <label>Password <input name="password" type="password" autocomplete="current-password" /></label>
-    <button type="submit">Sign in</button>
-  </form>
-  {oidc}
-  {ldap}
-</body></html>"#
-    ))
+    let ldap = if state.directory.is_some() {
+        r#"<h2>Directory (LDAP gateway)</h2>
+<form method="post" action="/login/ldap">
+  <label for="ldap-user">Username</label><input id="ldap-user" name="username">
+  <label for="ldap-pass">Password</label><input id="ldap-pass" name="password" type="password">
+  <button type="submit">Sign in via directory</button>
+</form>"#
+    } else {
+        ""
+    };
+    let username = if username.is_empty() && state.demo { "alice" } else { username };
+    let body = format!(
+        r#"<h1>Sign in</h1>
+<p class="lead">Use your authcraft account to continue.</p>
+{demo}
+{err}
+<form method="post" action="/login">
+  <label for="username">Email</label>
+  <input id="username" name="username" autocomplete="username" required value="{username}">
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <button type="submit">Sign in</button>
+</form>
+<div class="links"><a href="/signup">Create an account</a><a href="/forgot">Forgot password?</a></div>
+{oidc}
+{ldap}"#,
+        err = pages::error_line(error),
+        username = pages::esc(username),
+    );
+    pages::layout("Sign in", &body)
 }
 
 async fn login_get(State(state): State<AppState>) -> Html<String> {
-    login_page(None, state.oidc_rp.is_some(), state.directory.is_some())
+    login_page(&state, None, "")
 }
 
 #[derive(Debug, Deserialize)]
@@ -894,7 +927,7 @@ async fn oidc_callback(
     if q.error.is_some() {
         return (
             StatusCode::BAD_REQUEST,
-            login_page(Some("Upstream login failed"), true, state.directory.is_some()),
+            login_page(&state, Some("Upstream login failed"), ""),
         )
             .into_response();
     }
@@ -951,11 +984,7 @@ async fn oidc_callback(
         Err(_) => {
             return (
                 StatusCode::BAD_GATEWAY,
-                login_page(
-                    Some("Upstream token missing id_token"),
-                    true,
-                    state.directory.is_some(),
-                ),
+                login_page(&state, Some("Upstream token missing id_token"), ""),
             )
                 .into_response();
         }
@@ -984,11 +1013,7 @@ async fn oidc_callback(
         Err(_) => {
             return (
                 StatusCode::UNAUTHORIZED,
-                login_page(
-                    Some("Invalid upstream ID token"),
-                    true,
-                    state.directory.is_some(),
-                ),
+                login_page(&state, Some("Invalid upstream ID token"), ""),
             )
                 .into_response();
         }
@@ -1038,11 +1063,7 @@ async fn ldap_login(
         Err(_) => {
             return (
                 StatusCode::UNAUTHORIZED,
-                login_page(
-                    Some("Invalid directory credentials"),
-                    state.oidc_rp.is_some(),
-                    true,
-                ),
+                login_page(&state, Some("Invalid directory credentials"), ""),
             )
                 .into_response();
         }
@@ -1075,27 +1096,43 @@ async fn login_post(
         return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
     }
 
-    let username = form.username.trim().to_owned();
-    let login = match state
-        .server
-        .authenticate_password(&username, &form.password)
-    {
-        Ok(login) => login,
+    // ADR 0025: login names are lowercased emails (the demo user is `alice`).
+    let username = form.username.trim().to_ascii_lowercase();
+    let client = ratelimit::client_key(&headers);
+    if !state.accounts.login_allowed(&username, &client) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            login_page(&state, Some("Too many attempts. Try again later."), &username),
+        )
+            .into_response();
+    }
+    // Argon2id is slow by design; keep it off the async workers.
+    let server = state.server.clone();
+    let (name, password) = (username.clone(), form.password);
+    let result = tokio::task::spawn_blocking(move || server.authenticate_password(&name, &password))
+        .await
+        .unwrap_or(Err(oauth::AuthnError::StorageUnavailable));
+    let login = match result {
+        Ok(login) => {
+            state.accounts.login_succeeded(&username);
+            login
+        }
         Err(err) => {
             let message = match err {
                 oauth::AuthnError::EmailNotVerified => {
-                    "Verify your email address first: follow the link we sent you."
+                    // The password was right: send a fresh link, as glossa does.
+                    let _ = state.accounts.resend_verification(&username, &client);
+                    "Confirm your email address first. We have sent a new confirmation link."
                 }
                 oauth::AuthnError::StorageUnavailable => "Temporarily unavailable; try again.",
-                _ => "Invalid username or password",
+                _ => {
+                    state.accounts.login_failed(&username);
+                    "Invalid email or password."
+                }
             };
             return (
                 StatusCode::UNAUTHORIZED,
-                login_page(
-                    Some(message),
-                    state.oidc_rp.is_some(),
-                    state.directory.is_some(),
-                ),
+                login_page(&state, Some(message), &username),
             )
                 .into_response();
         }

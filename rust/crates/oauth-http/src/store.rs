@@ -1,33 +1,55 @@
-//! SQLite account storage for production mode (ADR 0024).
+//! SQLite storage for production mode (ADR 0024, ADR 0025).
 //!
-//! One table, `users`, keyed by login name, with the OIDC `sub` unique and the
-//! full [`UserRecord`] (including WebAuthn credentials) stored as JSON. The
-//! schema version lives in `PRAGMA user_version`.
+//! - `users`: keyed by login name, OIDC `sub` unique, the full [`UserRecord`]
+//!   (including WebAuthn credentials) as JSON.
+//! - `auth_tokens`: hashed one-time email links (verify, reset).
+//! - `outbox`: queued mail (see [`crate::mailer`]).
+//!
+//! The schema version lives in `PRAGMA user_version`. One connection is shared
+//! by the account repository and the account flows.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use oauth::{UserRecord, UserRepository};
 use rusqlite::{params, Connection};
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
+
+/// A migrated connection shared by [`SqliteUserStore`] and the account flows.
+pub type Db = Arc<Mutex<Connection>>;
+
+/// Opens (or creates) the database at `path` and migrates it. `":memory:"`
+/// gives a private in-memory database (demo mode, tests).
+pub fn open_db(path: &Path) -> Result<Db, rusqlite::Error> {
+    let conn = Connection::open(path)?;
+    if path != Path::new(":memory:") {
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+    }
+    conn.pragma_update(None, "synchronous", "FULL")?;
+    migrate(&conn)?;
+    Ok(Arc::new(Mutex::new(conn)))
+}
 
 pub struct SqliteUserStore {
-    conn: Mutex<Connection>,
+    conn: Db,
 }
 
 impl SqliteUserStore {
     /// Opens (or creates) the database at `path` and migrates it.
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
-        let conn = Connection::open(path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "FULL")?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        migrate(&conn)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        Ok(Self::from_db(open_db(path)?))
+    }
+
+    /// Uses an already opened database.
+    pub fn from_db(conn: Db) -> Self {
+        Self { conn }
+    }
+
+    /// The shared connection, for the account flows.
+    pub fn db(&self) -> Db {
+        self.conn.clone()
     }
 
     /// Every stored account, for `AuthorizationServer::attach_user_repository`.
@@ -57,6 +79,36 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
                  updated_at INTEGER NOT NULL
              );
              PRAGMA user_version = 1;",
+        )?;
+    }
+    if version < 2 {
+        conn.execute_batch(
+            "CREATE TABLE auth_tokens (
+                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                 username      TEXT NOT NULL,
+                 purpose       TEXT NOT NULL CHECK (purpose IN ('verify', 'reset')),
+                 token_hash    TEXT NOT NULL UNIQUE,
+                 -- Sign-up details applied when this verify link is used, so
+                 -- the password belongs to whoever registered from that link.
+                 password_hash TEXT,
+                 name          TEXT,
+                 expires_at    INTEGER NOT NULL,
+                 created_at    INTEGER NOT NULL
+             );
+             CREATE INDEX idx_auth_tokens_user ON auth_tokens(username, purpose);
+             CREATE TABLE outbox (
+                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                 to_addr         TEXT NOT NULL,
+                 subject         TEXT NOT NULL,
+                 text_body       TEXT NOT NULL,
+                 html_body       TEXT NOT NULL,
+                 attempts        INTEGER NOT NULL DEFAULT 0,
+                 next_attempt_at INTEGER NOT NULL,
+                 last_error      TEXT,
+                 created_at      INTEGER NOT NULL
+             );
+             CREATE INDEX idx_outbox_due ON outbox(next_attempt_at);
+             PRAGMA user_version = 2;",
         )?;
     }
     Ok(())

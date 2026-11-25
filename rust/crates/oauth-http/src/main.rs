@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use oauth::ServerConfig;
+use oauth_http::mailer::{self, Mailer, ResendConfig, RESEND_ENDPOINT};
 use oauth_http::{app, config, store, tls, AppState};
 use tracing_subscriber::EnvFilter;
 
@@ -53,6 +54,45 @@ struct Args {
     /// PEM CA certificates trusted for tls_client_auth (ADR 0019).
     #[arg(long, env = "AUTHCRAFT_TLS_CLIENT_CA")]
     tls_client_ca: Option<String>,
+    /// Sender for account email, e.g. "authcraft <noreply@accumu.cc>". Enables
+    /// Resend; without it, email is printed to the log.
+    #[arg(long)]
+    mail_from: Option<String>,
+    /// Reply-To for account email.
+    #[arg(long)]
+    mail_reply_to: Option<String>,
+    /// Resend API key file. Defaults to $CREDENTIALS_DIRECTORY/resend-api-key.
+    #[arg(long)]
+    mail_key_file: Option<PathBuf>,
+    /// Override the Resend endpoint (testing).
+    #[arg(long, default_value = RESEND_ENDPOINT)]
+    mail_endpoint: String,
+}
+
+/// Resend when a sender is configured (the key is then required), otherwise
+/// log mode (ADR 0025).
+fn mailer_from(args: &Args) -> Result<Mailer, BoxError> {
+    let Some(from) = args.mail_from.clone() else {
+        tracing::warn!("mail: no --mail-from; account email is printed to the log");
+        return Ok(Mailer::Log);
+    };
+    let key_file = match &args.mail_key_file {
+        Some(path) => path.clone(),
+        None => PathBuf::from(
+            std::env::var_os("CREDENTIALS_DIRECTORY")
+                .ok_or("--mail-from needs --mail-key-file or systemd LoadCredential=resend-api-key")?,
+        )
+        .join("resend-api-key"),
+    };
+    Ok(Mailer::Resend(ResendConfig {
+        http: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?,
+        endpoint: args.mail_endpoint.clone(),
+        api_key: config::read_secret(&key_file)?,
+        from,
+        reply_to: args.mail_reply_to.clone(),
+    }))
 }
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -79,12 +119,9 @@ fn production_state(args: &Args, data_dir: &PathBuf, public_url: &str) -> Result
     };
     let mut state = AppState::production(server_config, clients, signing)?;
     state.secure_cookies = args.secure_cookies;
-    // ADR 0024: accounts live in SQLite in the data directory.
-    let store = Arc::new(store::SqliteUserStore::open(&data_dir.join("authcraft.db"))?);
-    let existing = store.load_all()?;
-    tracing::info!("loaded {} account(s)", existing.len());
-    state.server.attach_user_repository(store, existing)?;
-    Ok(state)
+    // ADR 0024 / 0025: accounts, link tokens, and the outbox share one database.
+    let db = store::open_db(&data_dir.join("authcraft.db"))?;
+    state.with_database(db)
 }
 
 #[tokio::main]
@@ -112,6 +149,7 @@ async fn main() -> Result<(), BoxError> {
             return Err("choose a mode: --demo, or --data-dir with --public-url (see --help)".into())
         }
     };
+    tokio::spawn(mailer::run(state.accounts.outbox(), mailer_from(&args)?));
     let listen = args.listen.unwrap_or_else(|| default_listen.parse().expect("default address"));
     let listener = tokio::net::TcpListener::bind(listen).await?;
 

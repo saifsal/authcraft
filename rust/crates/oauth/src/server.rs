@@ -770,9 +770,32 @@ impl AuthorizationServer {
         }
     }
 
+    /// A copy of `username`'s account, if it exists.
+    pub fn account(&self, username: &str) -> Option<UserRecord> {
+        self.users
+            .lock()
+            .expect("users lock")
+            .get(username.trim())
+            .cloned()
+    }
+
+    /// Stores a new account under `username` unless one exists (ADR 0025).
+    /// Returns `Ok(false)` when the name is taken; nothing is written then.
+    pub fn create_account(&self, username: &str, record: UserRecord) -> Result<bool, AuthnError> {
+        let username = username.trim();
+        let mut users = self.users.lock().expect("users lock");
+        if users.get(username).is_some() || users.get_by_subject(&record.subject).is_some() {
+            return Ok(false);
+        }
+        self.store_user(username, &record)
+            .map_err(|_| AuthnError::StorageUnavailable)?;
+        users.insert(username.to_owned(), record);
+        Ok(true)
+    }
+
     /// Applies `change` to a copy of `username`'s record, stores the copy,
     /// then replaces the in-memory record. Nothing changes if storing fails.
-    fn update_user<T>(
+    pub fn update_user<T>(
         &self,
         username: &str,
         change: impl FnOnce(&mut UserRecord) -> Result<T, AuthnError>,

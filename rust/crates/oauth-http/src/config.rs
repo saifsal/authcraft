@@ -109,6 +109,29 @@ pub fn load_or_create_signing_key(data_dir: &Path) -> Result<SigningKey, ConfigE
     Ok(key)
 }
 
+/// Checks the production issuer (`--public-url`): an absolute `https` URL, or
+/// `http://localhost[:port]` for local testing, without a trailing slash,
+/// query, or fragment. WebAuthn derives its relying-party ID from the host,
+/// and rejects IP addresses, so those are refused here with a clear message.
+pub fn validate_public_url(url: &str) -> Result<(), ConfigError> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("--public-url {url}: {e}"))?;
+    let host_ok = match (parsed.scheme(), parsed.host()) {
+        ("https", Some(url::Host::Domain(_))) => true,
+        ("http", Some(url::Host::Domain("localhost"))) => true,
+        _ => false,
+    };
+    if !host_ok {
+        return Err(format!(
+            "--public-url {url}: use https with a domain name (or http://localhost for testing); IP addresses cannot be WebAuthn relying parties"
+        )
+        .into());
+    }
+    if url.ends_with('/') || parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(format!("--public-url {url}: no trailing slash, query, or fragment").into());
+    }
+    Ok(())
+}
+
 /// Reads a secret file, trimming one trailing newline. Empty is an error.
 pub fn read_secret(path: &Path) -> Result<String, ConfigError> {
     let raw = fs::read_to_string(path)?;
@@ -172,6 +195,23 @@ mod tests {
             r#"{"clients":[{"client_id":"a","redirect_uris":["https://a.example/cb"]},{"client_id":"a","redirect_uris":["https://a.example/cb"]}]}"#,
         ] {
             assert!(parse_clients(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn public_url_rules() {
+        for ok in ["https://authcraft.accumu.cc", "http://localhost:8083", "https://a.example/idp"] {
+            assert!(validate_public_url(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://authcraft.accumu.cc",
+            "https://127.0.0.1",
+            "http://127.0.0.1:8083",
+            "https://authcraft.accumu.cc/",
+            "https://a.example?x=1",
+            "authcraft.accumu.cc",
+        ] {
+            assert!(validate_public_url(bad).is_err(), "{bad}");
         }
     }
 

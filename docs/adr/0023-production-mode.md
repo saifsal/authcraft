@@ -37,7 +37,11 @@ lists the demo secrets (R4) and open registration (R2) as residual risks.
 5. `--secure-cookies` marks the login cookie `Secure` on plain HTTP, for
    Caddy terminating TLS in front (ADR 0021 B2 only covers the direct HTTPS
    listener).
-6. `--tls-cert`, `--tls-key`, and `--tls-client-ca` replace the environment
+6. `--public-url` must be `https://` with a domain name (or
+   `http://localhost` for testing), without a trailing slash, query, or
+   fragment. WebAuthn derives its relying-party ID from the host and rejects
+   IP addresses, so a bad value fails at startup with a clear message.
+7. `--tls-cert`, `--tls-key`, and `--tls-client-ca` replace the environment
    variables of ADR 0017 / 0019; the variables still work through clap.
 
 ## Consequences

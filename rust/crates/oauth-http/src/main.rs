@@ -98,6 +98,7 @@ fn mailer_from(args: &Args) -> Result<Mailer, BoxError> {
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 fn production_state(args: &Args, data_dir: &PathBuf, public_url: &str) -> Result<AppState, BoxError> {
+    config::validate_public_url(public_url)?;
     std::fs::create_dir_all(data_dir)?;
     let signing = config::load_or_create_signing_key(data_dir)?;
     let mut server_config = ServerConfig::new(public_url, "api");

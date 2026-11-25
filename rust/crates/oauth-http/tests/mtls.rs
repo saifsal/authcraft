@@ -119,14 +119,17 @@ async fn self_signed_mtls_client_gets_certificate_bound_token() {
     let plain = client(addr, &server_ck, None);
     let url = |path: &str| url_on(addr, path);
 
-    let disco: Value = plain
+    let disco = plain
         .get(url("/.well-known/openid-configuration"))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
+    assert_eq!(
+        disco.headers()["strict-transport-security"],
+        oauth_http::tls::HSTS,
+        "HTTPS responses carry HSTS"
+    );
+    let disco: Value = disco.json().await.unwrap();
     assert_eq!(disco["tls_client_certificate_bound_access_tokens"], true);
     assert!(disco["token_endpoint_auth_methods_supported"]
         .as_array()

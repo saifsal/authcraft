@@ -8,10 +8,13 @@
 //! the handshake signature, so a client proves it holds the private key.
 //!
 //! [`serve_tls`] inserts the leaf certificate as a [`TlsClientCert`] request
-//! extension for each connection.
+//! extension for each connection, and adds `Strict-Transport-Security` to
+//! every HTTPS response (RFC 6797; never sent over plain HTTP).
 
 use std::sync::Arc;
 
+use axum::http::{header, HeaderValue};
+use axum::response::Response;
 use axum::{Extension, Router};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
@@ -126,6 +129,15 @@ pub fn ders_from_pem_file(path: &str) -> Result<Vec<Vec<u8>>, Box<dyn std::error
         .collect::<Result<Vec<_>, _>>()?)
 }
 
+/// HSTS value: one year, as RFC 6797 §11.2 suggests for established sites.
+pub const HSTS: &str = "max-age=31536000";
+
+async fn add_hsts(mut res: Response) -> Response {
+    res.headers_mut()
+        .insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static(HSTS));
+    res
+}
+
 /// Serves `router` over TLS, tagging each request with the connection's
 /// client certificate. Runs until the listener fails.
 pub async fn serve_tls(
@@ -134,6 +146,7 @@ pub async fn serve_tls(
     config: Arc<rustls::ServerConfig>,
 ) -> std::io::Result<()> {
     let acceptor = TlsAcceptor::from(config);
+    let router = router.layer(axum::middleware::map_response(add_hsts));
     loop {
         let (tcp, _) = listener.accept().await?;
         let acceptor = acceptor.clone();

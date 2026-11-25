@@ -390,3 +390,40 @@ async fn registration_echoes_policy_and_token_requires_dpop() {
     assert_eq!(res.status, StatusCode::BAD_REQUEST);
     assert_eq!(res.json()["error"], "invalid_request");
 }
+
+#[tokio::test]
+async fn security_headers_on_login_and_token_responses() {
+    let app = app(AppState::demo());
+    let login = app.clone().oneshot(get("/login")).await.unwrap();
+    let h = login.headers();
+    assert_eq!(h["x-frame-options"], "DENY");
+    assert_eq!(h["content-security-policy"], "frame-ancestors 'none'");
+    assert_eq!(h["referrer-policy"], "no-referrer");
+    assert!(h.get("cache-control").is_none(), "login page is not a token response");
+
+    let token = app
+        .oneshot(post_form("/token", &[("grant_type", "authorization_code")]))
+        .await
+        .unwrap();
+    let h = token.headers();
+    assert_eq!(h["cache-control"], "no-store");
+    assert_eq!(h["pragma"], "no-cache");
+    assert_eq!(h["x-frame-options"], "DENY");
+}
+
+#[tokio::test]
+async fn password_and_client_credentials_grants_are_unsupported() {
+    let app = app(AppState::demo());
+    for grant in ["password", "client_credentials", "implicit"] {
+        let res = send(
+            &app,
+            post_form(
+                "/token",
+                &[("grant_type", grant), ("client_id", "spa"), ("username", "alice"), ("password", "password")],
+            ),
+        )
+        .await;
+        assert_eq!(res.status, StatusCode::BAD_REQUEST, "{grant}");
+        assert_eq!(res.json()["error"], "unsupported_grant_type", "{grant}");
+    }
+}

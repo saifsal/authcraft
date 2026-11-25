@@ -106,6 +106,35 @@ impl AppState {
     }
 }
 
+/// Response headers required by RFC 9700 and RFC 6749 (ADR 0021):
+/// - every response: `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'`
+///   (clickjacking, RFC 9700 §4.16), `Referrer-Policy: no-referrer`
+///   (Referer leakage of codes and state, RFC 9700 §4.2.4);
+/// - responses that carry tokens, credentials, or user data:
+///   `Cache-Control: no-store` and `Pragma: no-cache` (RFC 6749 §5.1).
+async fn security_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let sensitive = matches!(
+        req.uri().path(),
+        "/token" | "/par" | "/register" | "/introspect" | "/revoke" | "/userinfo"
+    );
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    if sensitive {
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        h.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    }
+    res
+}
+
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { StatusCode::OK }))
@@ -142,6 +171,7 @@ pub fn app(state: AppState) -> Router {
                 .delete(scim_delete_user),
         )
         .with_state(state)
+        .layer(axum::middleware::from_fn(security_headers))
 }
 
 fn scim_error(status: StatusCode, detail: &str) -> Response {

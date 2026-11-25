@@ -115,11 +115,10 @@ pub fn load_or_create_signing_key(data_dir: &Path) -> Result<SigningKey, ConfigE
 /// and rejects IP addresses, so those are refused here with a clear message.
 pub fn validate_public_url(url: &str) -> Result<(), ConfigError> {
     let parsed = url::Url::parse(url).map_err(|e| format!("--public-url {url}: {e}"))?;
-    let host_ok = match (parsed.scheme(), parsed.host()) {
-        ("https", Some(url::Host::Domain(_))) => true,
-        ("http", Some(url::Host::Domain("localhost"))) => true,
-        _ => false,
-    };
+    let host_ok = matches!(
+        (parsed.scheme(), parsed.host()),
+        ("https", Some(url::Host::Domain(_))) | ("http", Some(url::Host::Domain("localhost")))
+    );
     if !host_ok {
         return Err(format!(
             "--public-url {url}: use https with a domain name (or http://localhost for testing); IP addresses cannot be WebAuthn relying parties"

@@ -70,7 +70,7 @@ DPoP. mTLS is the remaining RFC 9700 mechanism, and it needs a TLS listener.
 
 ## Not in this slice
 
-- `tls_client_auth` (PKI method: CA chain plus subject DN or SAN matching).
+- `tls_client_auth` (PKI method); added by [ADR 0019](0019-pki-tls-client-auth.md).
 - `mtls_endpoint_aliases`; the same endpoints serve TLS and mTLS.
 - TLS for `authcraft-edge` (Zig) and production hardening (certificate
   reload, HSTS, non-loopback binds).

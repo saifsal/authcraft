@@ -147,12 +147,12 @@ async fn confidential_client_full_flow_over_http() {
     let disco = send(&app, get("/.well-known/openid-configuration")).await.json();
     assert_eq!(
         disco["token_endpoint_auth_methods_supported"],
-        serde_json::json!(["none", "private_key_jwt", "self_signed_tls_client_auth"])
+        serde_json::json!(["none", "private_key_jwt", "self_signed_tls_client_auth", "tls_client_auth"])
     );
     assert_eq!(disco["request_parameter_supported"], true);
     assert_eq!(
         disco["introspection_endpoint_auth_methods_supported"],
-        serde_json::json!(["private_key_jwt", "self_signed_tls_client_auth"])
+        serde_json::json!(["private_key_jwt", "self_signed_tls_client_auth", "tls_client_auth"])
     );
 
     // RFC 7591 registration with an inline JWKS object.

@@ -52,7 +52,10 @@
         "token_cert": {
           "enum": [
             "A",
-            "B"
+            "B",
+            "pki-good",
+            "pki-untrusted",
+            "pki-serveronly"
           ],
           "description": "Certificate (x-authcraft-certs) on the /token connection; absent means none."
         },
@@ -67,6 +70,9 @@
           "enum": [
             "A",
             "B",
+            "pki-good",
+            "pki-untrusted",
+            "pki-serveronly",
             null
           ],
           "description": "When present, call UserInfo with this certificate (null: none)."
@@ -75,6 +81,9 @@
           "enum": [
             "A",
             "B",
+            "pki-good",
+            "pki-untrusted",
+            "pki-serveronly",
             null
           ],
           "description": "When present, refresh with this certificate (null: none)."
@@ -110,6 +119,9 @@
           "enum": [
             "A",
             "B",
+            "pki-good",
+            "pki-untrusted",
+            "pki-serveronly",
             null
           ],
           "description": "Certificate whose x5t#S256 must appear in the (last) access token's cnf; null: none."
@@ -127,5 +139,28 @@
       "x5t#S256": "Xu8-zVEbpflc5FvqoVS9q1QhHns1JJufzFYTWLf2yDM"
     }
   },
-  "x-authcraft-server": "Issuer https://auth.example. Clients: spa (public, https://app.example/cb) and tls (self_signed_tls_client_auth registered with certificate A, https://tls.example/cb). Certificates are self-signed Ed25519 test certificates; only their DER bytes matter (the library compares thumbprints)."
+  "x-authcraft-server": "Issuer https://auth.example. Clients: spa (public, https://app.example/cb); tls (self_signed_tls_client_auth registered with certificate A, https://tls.example/cb); pki (tls_client_auth, tls_client_auth_san_dns client.example), pki-uri (tls_client_auth, tls_client_auth_san_uri https://client.example/id), pki-other (tls_client_auth, tls_client_auth_san_dns other.example); all pki clients use https://pki.example/cb. tls_client_auth trust anchors: x-authcraft-pki.trust_anchor. Leaf certificates are issued directly by the anchor; no intermediates.",
+  "x-authcraft-pki": {
+    "trust_anchor": {
+      "der_b64url": "MIIBfjCCASSgAwIBAgIUVr6Eb3XSQQLBXseE3XTOjIgV-FcwCgYIKoZIzj0EAwIwHTEbMBkGA1UEAwwSYXV0aGNyYWZ0IHRlc3QgY2ExMB4XDTI2MTEyNTE3MjYwOVoXDTM2MTEyMjE3MjYwOVowHTEbMBkGA1UEAwwSYXV0aGNyYWZ0IHRlc3QgY2ExMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEv7vX_A2ruGvQOmXvXq4u4XY1qqrvgKaF-Wv5OovWjs4w-BsSWaBmtUkTYH3ItDolVFRFprdz9I8C9RDbV2qSV6NCMEAwHQYDVR0OBBYEFHv0PLf2iD2EEIg2WoSOEI87qpPGMA8GA1UdEwEB_wQFMAMBAf8wDgYDVR0PAQH_BAQDAgEGMAoGCCqGSM49BAMCA0gAMEUCIH2s-CLtdknsi9xCP3xCCEoWvdYtqgI1R7iBbBo1p1QkAiEAtqPHBIYhk2mu38a2sLgBRrdAvssG43s0B1XllskHzTM",
+      "description": "Test CA (P-256) trusted for tls_client_auth."
+    },
+    "certs": {
+      "pki-good": {
+        "der_b64url": "MIIBojCCAUigAwIBAgIBZTAKBggqhkjOPQQDAjAdMRswGQYDVQQDDBJhdXRoY3JhZnQgdGVzdCBjYTEwHhcNMjYxMTI1MTcyNjA5WhcNMzYxMTIyMTcyNjA5WjAPMQ0wCwYDVQQDDARnb29kMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXO2GGwRUDavD3f2a7LrajUO_NlOsw3f3zqMjZPuMs4BGHxHuIvA8aXzLkWLnfMk1lLy3m5w0P-7CYHiAv7DfoKOBhjCBgzAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB_wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjBOBgNVHREERzBFgg5jbGllbnQuZXhhbXBsZYYZaHR0cHM6Ly9jbGllbnQuZXhhbXBsZS9pZIESY2xpZW50QGV4YW1wbGUuY29thwTAAAIHMAoGCCqGSM49BAMCA0gAMEUCIQCDma3ns0fWjcgYCBHpv176vU3I1OuWRU2gEGB5ibzntQIgHfsfGmTiuLrfryhG8j0Pp8oIVUveQhc8B5DF0Kki8DU",
+        "x5t#S256": "a757aWuI4x8pazIhivQ4EQiAq_0ZujDcSlT8e40w81Q",
+        "description": "Issued by the trust anchor; EKU clientAuth; SAN DNS client.example, URI https://client.example/id, email client@example.com, IP 192.0.2.7; valid 2026-11-25 to 2036-11-22."
+      },
+      "pki-untrusted": {
+        "der_b64url": "MIIBqDCCAU2gAwIBAgIBZjAKBggqhkjOPQQDAjAdMRswGQYDVQQDDBJhdXRoY3JhZnQgdGVzdCBjYTIwHhcNMjYxMTI1MTcyNjA5WhcNMzYxMTIyMTcyNjA5WjAUMRIwEAYDVQQDDAl1bnRydXN0ZWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAShrUV1AnLQzGpWyjVhoRy2CFtBsVWU4I4U4XcLYF4zYlq_IBVze5oK6lRDrRH8yS93PJnv4moklWuBHqDdT1Ado4GGMIGDMAwGA1UdEwEB_wQCMAAwDgYDVR0PAQH_BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMCME4GA1UdEQRHMEWCDmNsaWVudC5leGFtcGxlhhlodHRwczovL2NsaWVudC5leGFtcGxlL2lkgRJjbGllbnRAZXhhbXBsZS5jb22HBMAAAgcwCgYIKoZIzj0EAwIDSQAwRgIhALGZzFxX5bIXOj1Yjp9lE3WrK7F_wQ87mlm0w8yLp9SjAiEA1tN2tRFYz2igO6LhOS1wifa-3Kk0kA9VX5y02QZm8fk",
+        "x5t#S256": "3eV3EJB6C5QwOJpv0px8SKw3uAVUp7XHfRH3WA1eBsc",
+        "description": "Same SANs and EKU, issued by a CA that is not trusted."
+      },
+      "pki-serveronly": {
+        "der_b64url": "MIIBcTCCARegAwIBAgIBZzAKBggqhkjOPQQDAjAdMRswGQYDVQQDDBJhdXRoY3JhZnQgdGVzdCBjYTEwHhcNMjYxMTI1MTcyNjA5WhcNMzYxMTIyMTcyNjA5WjAVMRMwEQYDVQQDDApzZXJ2ZXJvbmx5MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5Tx-Nz7XgAwTSz3Rp-VAY8wMJhyTxEm-CrlVPVqH-dlKUeZNgInN8gkpNMmwhuoGLaVq0pZHCpB_9YcH202HBaNQME4wDAYDVR0TAQH_BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwGQYDVR0RBBIwEIIOY2xpZW50LmV4YW1wbGUwCgYIKoZIzj0EAwIDSAAwRQIgXHy_p4e_VQyiNREqh1N6ZTmCCLr9nUg0zDY8Ta5vS7oCIQCtDAc_CSybh5kAXEjvlG8-oWudNU9ypwAdIVHU-bvwuQ",
+        "x5t#S256": "YQisDnSnA_nhz143yfeOrbNlrcuWlQRVU9y9_ZQVVj4",
+        "description": "Issued by the trust anchor, EKU serverAuth only, SAN DNS client.example."
+      }
+    }
+  }
 }

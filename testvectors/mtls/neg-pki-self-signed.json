@@ -1,0 +1,19 @@
+{
+  "id": "neg-pki-self-signed",
+  "source": "generated",
+  "description": "A self-signed certificate does not satisfy tls_client_auth.",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "redirect_uri": "https://pki.example/cb",
+    "now_authorize": 1900000000,
+    "now_token": 1900000001,
+    "client_id": "pki",
+    "token_cert": "A"
+  },
+  "expect": {
+    "ok": false,
+    "phase": "token",
+    "error": "invalid_client"
+  }
+}

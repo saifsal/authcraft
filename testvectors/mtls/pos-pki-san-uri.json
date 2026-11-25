@@ -1,0 +1,19 @@
+{
+  "id": "pos-pki-san-uri",
+  "source": "generated",
+  "description": "tls_client_auth with tls_client_auth_san_uri matches the certificate's URI SAN.",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "redirect_uri": "https://pki.example/cb",
+    "now_authorize": 1900000000,
+    "now_token": 1900000001,
+    "client_id": "pki-uri",
+    "token_cert": "pki-good"
+  },
+  "expect": {
+    "ok": true,
+    "token_type": "Bearer",
+    "cnf_x5t": "pki-good"
+  }
+}

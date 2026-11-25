@@ -6,6 +6,10 @@ description = "OAuth 2.0 authorization-code + PKCE (S256) library for authcraft 
 publish = false
 
 [dependencies]
+# RFC 8705 tls_client_auth (ADR 0019); both already locked via rustls / webauthn-rs.
+webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "1"
+x509-parser = "0.18"
 jose = { path = "../jose" }
 ring = "0.17"
 argon2 = "0.5"

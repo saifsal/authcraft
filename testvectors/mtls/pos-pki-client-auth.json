@@ -1,0 +1,19 @@
+{
+  "id": "pos-pki-client-auth",
+  "source": "generated",
+  "description": "A tls_client_auth client presenting a CA-issued certificate with its registered SAN DNS authenticates; the token is bound to that certificate.",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "redirect_uri": "https://pki.example/cb",
+    "now_authorize": 1900000000,
+    "now_token": 1900000001,
+    "client_id": "pki",
+    "token_cert": "pki-good"
+  },
+  "expect": {
+    "ok": true,
+    "token_type": "Bearer",
+    "cnf_x5t": "pki-good"
+  }
+}

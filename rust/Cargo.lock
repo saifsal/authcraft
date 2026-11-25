@@ -1567,12 +1567,15 @@ dependencies = [
  "argon2",
  "jose",
  "ring",
+ "rustls-pki-types",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "url",
  "uuid",
  "webauthn-authenticator-rs",
  "webauthn-rs",
+ "x509-parser",
 ]
 
 [[package]]

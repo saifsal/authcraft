@@ -94,6 +94,7 @@ Profile: [ADR 0009](adr/0009-hardening-par-dpop.md). Narrative: [oauth-m4.md](oa
 | RFC 7523 §2.2 / OIDC Core §9 | `private_key_jwt` client auth at `/token`, `/par`, `/revoke`; `aud` = issuer; single-use `jti`; foreign `typ` refused; `invalid_client` | `testvectors/client_auth/` + `oauth::client_auth` (ADR 0014) |
 | RFC 9101 | Signed `request` by value at `/authorize` and `/par`; `typ` `oauth-authz-req+jwt`; signed claims only; `invalid_request_object` | `testvectors/jar/` + `oauth::request_object` (ADR 0015) |
 | RFC 8705 | `self_signed_tls_client_auth`; `cnf.x5t#S256` bound access tokens and refresh families; UserInfo binding check; `cnf` in introspection; optional TLS listener | `testvectors/mtls/` + `oauth::mtls` + `oauth-http/tests/mtls.rs` (ADR 0017) |
+| RFC 8705 §2.1 | `tls_client_auth`: leaf validated against configured CAs (`rustls-webpki`), registered SAN (DNS, URI, IP, email) required; no subject DN | PKI cases in `testvectors/mtls/` + `oauth-http/tests/mtls.rs` (ADR 0019) |
 | RFC 9126 §6 / RFC 9449 §5.2 / RFC 8705 §3.4 | Per-client `require_pushed_authorization_requests`, `dpop_bound_access_tokens`, `tls_client_certificate_bound_access_tokens`; server-wide `require_sender_constrained_tokens` | `testvectors/enforcement/` (ADR 0018) |
 | RFC 7523 / RFC 9101 JWT layer (Go) | Assertions and request objects in `client_auth/`, `jar/`, `introspect/` vectors re-verified with the Go verifier and a port of the claim/`typ` rules | `go/harness/oauth_jwt_test.go` |
 

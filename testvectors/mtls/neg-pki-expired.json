@@ -1,0 +1,19 @@
+{
+  "id": "neg-pki-expired",
+  "source": "generated",
+  "description": "A certificate outside its validity period gets invalid_client.",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "redirect_uri": "https://pki.example/cb",
+    "now_authorize": 2200000000,
+    "now_token": 2200000001,
+    "client_id": "pki",
+    "token_cert": "pki-good"
+  },
+  "expect": {
+    "ok": false,
+    "phase": "token",
+    "error": "invalid_client"
+  }
+}

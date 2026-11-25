@@ -58,6 +58,9 @@ pub struct ServerConfig {
     /// When true, every token request must be sender-constrained with DPoP
     /// or a TLS client certificate (ADR 0018). Bearer-only requests fail.
     pub require_sender_constrained_tokens: bool,
+    /// DER certificates of the CAs trusted for `tls_client_auth` client
+    /// certificates (RFC 8705 §2.1, ADR 0019). Empty disables the method.
+    pub tls_client_auth_trust_anchors: Vec<Vec<u8>>,
 }
 
 /// Published demo admin bearer token (educational only).
@@ -85,6 +88,7 @@ impl ServerConfig {
             admin_token: String::new(),
             require_client_assertion_typ: false,
             require_sender_constrained_tokens: false,
+            tls_client_auth_trust_anchors: Vec::new(),
         }
     }
 }
@@ -116,6 +120,8 @@ pub struct DynamicClientRequest {
     pub require_signed_request_object: bool,
     /// RFC 9126 / RFC 9449 / RFC 8705 enforcement metadata (ADR 0018).
     pub policy: ClientPolicy,
+    /// `tls_client_auth` subject (RFC 8705 §2.1.2); only with that method.
+    pub tls_client_auth_subject: Option<mtls::TlsClientAuthSubject>,
 }
 
 /// RFC 7591 registration response fields.
@@ -414,6 +420,18 @@ impl AuthorizationServer {
     ) -> Result<Client, OAuthError> {
         let client = self.lookup_client(client_id)?;
         match &client.token_endpoint_auth {
+            TokenEndpointAuth::TlsClientAuth { subject } => {
+                if assertion_type.is_some() || assertion.is_some() {
+                    return Err(OAuthError::InvalidClient);
+                }
+                let cert = tls_client_cert.ok_or(OAuthError::InvalidClient)?;
+                mtls::verify_pki_client_cert(
+                    cert,
+                    &self.config.tls_client_auth_trust_anchors,
+                    subject,
+                    now,
+                )?;
+            }
             TokenEndpointAuth::SelfSignedTlsClientAuth { cert_thumbprints } => {
                 // RFC 8705 §2.2: the certificate is the credential; mixing in
                 // an assertion is ambiguous and refused.
@@ -484,6 +502,12 @@ impl AuthorizationServer {
         Ok(())
     }
 
+    /// `tls_client_auth` needs configured trust anchors (ADR 0019).
+    fn tls_client_auth_available(&self, client: &Client) -> bool {
+        !matches!(client.token_endpoint_auth, TokenEndpointAuth::TlsClientAuth { .. })
+            || !self.config.tls_client_auth_trust_anchors.is_empty()
+    }
+
     fn validate_client_metadata(client: &Client) -> bool {
         if !client.policy.is_consistent() {
             return false;
@@ -492,6 +516,9 @@ impl AuthorizationServer {
             // Request objects are verified with a signing JWKS (ADR 0015).
             TokenEndpointAuth::SelfSignedTlsClientAuth { cert_thumbprints } => {
                 !cert_thumbprints.is_empty() && !client.require_signed_request_object
+            }
+            TokenEndpointAuth::TlsClientAuth { subject } => {
+                subject.is_valid() && !client.require_signed_request_object
             }
             // A public client has no keys to sign request objects with and
             // cannot authenticate to the introspection endpoint.
@@ -519,6 +546,7 @@ impl AuthorizationServer {
         if client.client_id.trim().is_empty()
             || (client.redirect_uris.is_empty() && !client.resource_server)
             || !Self::validate_client_metadata(&client)
+            || !self.tls_client_auth_available(&client)
         {
             return Err(AdminError::InvalidRequest);
         }
@@ -840,7 +868,7 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"request_parameter_supported":true,"request_uri_parameter_supported":false,"request_object_signing_alg_values_supported":["EdDSA","ES256"],"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"revocation_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth"],"introspection_endpoint_auth_methods_supported":["private_key_jwt","self_signed_tls_client_auth"],"tls_client_certificate_bound_access_tokens":true,"scopes_supported":["openid","profile","email"]}}"#,
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"request_parameter_supported":true,"request_uri_parameter_supported":false,"request_object_signing_alg_values_supported":["EdDSA","ES256"],"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth","tls_client_auth"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"revocation_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth","tls_client_auth"],"introspection_endpoint_auth_methods_supported":["private_key_jwt","self_signed_tls_client_auth","tls_client_auth"],"tls_client_certificate_bound_access_tokens":true,"scopes_supported":["openid","profile","email"]}}"#,
             require_par = if self.config.require_par {
                 "true"
             } else {
@@ -871,8 +899,20 @@ impl AuthorizationServer {
                     cert_thumbprints: mtls::thumbprints_from_jwks(jwks)?,
                 }
             }
+            (Some("tls_client_auth"), None) => TokenEndpointAuth::TlsClientAuth {
+                subject: req
+                    .tls_client_auth_subject
+                    .clone()
+                    .ok_or(OAuthError::InvalidRequest)?,
+            },
             _ => return Err(OAuthError::InvalidRequest),
         };
+        // The subject only belongs with `tls_client_auth`.
+        if req.tls_client_auth_subject.is_some()
+            && !matches!(token_endpoint_auth, TokenEndpointAuth::TlsClientAuth { .. })
+        {
+            return Err(OAuthError::InvalidRequest);
+        }
         let token_endpoint_auth_method = token_endpoint_auth.method();
         let client_id = Self::new_jti().map_err(|_| OAuthError::ServerError)?;
         let client = Client {
@@ -885,7 +925,7 @@ impl AuthorizationServer {
             resource_server: false,
             policy: req.policy,
         };
-        if !Self::validate_client_metadata(&client) {
+        if !Self::validate_client_metadata(&client) || !self.tls_client_auth_available(&client) {
             return Err(OAuthError::InvalidRequest);
         }
         if !self.clients.lock().expect("clients lock").insert(client) {
@@ -2576,11 +2616,11 @@ mod tests {
         let srv = server();
         let doc = srv.openid_configuration();
         assert!(doc.contains(
-            r#""token_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth"]"#
+            r#""token_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth","tls_client_auth"]"#
         ));
         assert!(doc.contains(r#""tls_client_certificate_bound_access_tokens":true"#));
         assert!(doc.contains(
-            r#""introspection_endpoint_auth_methods_supported":["private_key_jwt","self_signed_tls_client_auth"]"#
+            r#""introspection_endpoint_auth_methods_supported":["private_key_jwt","self_signed_tls_client_auth","tls_client_auth"]"#
         ));
         let (_, key) = confidential_server();
         let kid = key.public.thumbprint();
@@ -2593,6 +2633,7 @@ mod tests {
                 jwks: Some(jwks.clone()),
                 require_signed_request_object: false,
                 policy: Default::default(),
+                tls_client_auth_subject: None,
             })
             .unwrap();
         assert_eq!(ok.token_endpoint_auth_method, "private_key_jwt");
@@ -2604,6 +2645,7 @@ mod tests {
                 jwks: Some(jwks),
                 require_signed_request_object: false,
                 policy: Default::default(),
+                tls_client_auth_subject: None,
             }),
             Err(OAuthError::InvalidRequest)
         );

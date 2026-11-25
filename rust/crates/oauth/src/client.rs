@@ -1,6 +1,7 @@
 //! Registered OAuth clients (ADR 0005 / ADR 0011 / ADR 0014).
 
 use crate::error::OAuthError;
+use crate::mtls::TlsClientAuthSubject;
 
 /// How a client authenticates at the token endpoint (ADR 0014).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -15,6 +16,9 @@ pub enum TokenEndpointAuth {
     /// identified by the `x5t#S256` thumbprints of its registered
     /// certificates (ADR 0017).
     SelfSignedTlsClientAuth { cert_thumbprints: Vec<String> },
+    /// Confidential client (`tls_client_auth`, RFC 8705 §2.1) holding a
+    /// certificate from a CA the AS trusts, with this subject (ADR 0019).
+    TlsClientAuth { subject: TlsClientAuthSubject },
 }
 
 impl TokenEndpointAuth {
@@ -24,6 +28,7 @@ impl TokenEndpointAuth {
             TokenEndpointAuth::None => "none",
             TokenEndpointAuth::PrivateKeyJwt { .. } => "private_key_jwt",
             TokenEndpointAuth::SelfSignedTlsClientAuth { .. } => "self_signed_tls_client_auth",
+            TokenEndpointAuth::TlsClientAuth { .. } => "tls_client_auth",
         }
     }
 }
@@ -91,6 +96,19 @@ impl Client {
     ) -> Self {
         Self {
             token_endpoint_auth: TokenEndpointAuth::SelfSignedTlsClientAuth { cert_thumbprints },
+            ..Self::new(client_id, redirect_uris)
+        }
+    }
+
+    /// A confidential client that authenticates with a CA-issued TLS client
+    /// certificate whose SAN matches `subject` (RFC 8705 §2.1).
+    pub fn tls_client_auth(
+        client_id: impl Into<String>,
+        redirect_uris: Vec<String>,
+        subject: TlsClientAuthSubject,
+    ) -> Self {
+        Self {
+            token_endpoint_auth: TokenEndpointAuth::TlsClientAuth { subject },
             ..Self::new(client_id, redirect_uris)
         }
     }

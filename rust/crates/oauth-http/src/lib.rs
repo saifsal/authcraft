@@ -80,8 +80,15 @@ impl AppState {
 
     /// Demo state with a chosen issuer (e.g. `https://localhost:8089` under TLS).
     pub fn demo_with_issuer(issuer: &str) -> Self {
+        Self::demo_tls(issuer, Vec::new())
+    }
+
+    /// Demo state for HTTPS: `tls_client_cas` are the DER CA certificates
+    /// trusted for `tls_client_auth` (ADR 0019).
+    pub fn demo_tls(issuer: &str, tls_client_cas: Vec<Vec<u8>>) -> Self {
         let key = generate_signing_key(Alg::EdDSA).expect("generate EdDSA key");
         let mut config = ServerConfig::new(issuer, "api");
+        config.tls_client_auth_trust_anchors = tls_client_cas;
         config.admin_token = DEMO_ADMIN_TOKEN.into();
         let state = Self::new(
             config,
@@ -296,6 +303,30 @@ pub struct AdminCreateClientBody {
     pub resource_server: bool,
     #[serde(flatten)]
     pub policy: PolicyBody,
+    #[serde(flatten)]
+    pub tls_subject: TlsSubjectBody,
+}
+
+/// RFC 8705 §2.1.2 `tls_client_auth` subject metadata (ADR 0019).
+#[derive(Debug, Default, Deserialize)]
+pub struct TlsSubjectBody {
+    pub tls_client_auth_subject_dn: Option<String>,
+    pub tls_client_auth_san_dns: Option<String>,
+    pub tls_client_auth_san_uri: Option<String>,
+    pub tls_client_auth_san_ip: Option<String>,
+    pub tls_client_auth_san_email: Option<String>,
+}
+
+impl TlsSubjectBody {
+    fn subject(&self) -> Result<Option<oauth::mtls::TlsClientAuthSubject>, OAuthError> {
+        oauth::mtls::TlsClientAuthSubject::from_metadata(
+            self.tls_client_auth_subject_dn.as_deref(),
+            self.tls_client_auth_san_dns.as_deref(),
+            self.tls_client_auth_san_uri.as_deref(),
+            self.tls_client_auth_san_ip.as_deref(),
+            self.tls_client_auth_san_email.as_deref(),
+        )
+    }
 }
 
 /// RFC 9126 / RFC 9449 / RFC 8705 client metadata flags (ADR 0018).
@@ -342,13 +373,22 @@ fn policy_json(body: &mut serde_json::Value, p: &ClientPolicy) {
         p.tls_client_certificate_bound_access_tokens.into();
 }
 
-/// Maps RFC 7591 `token_endpoint_auth_method` + `jwks` to the client model.
+/// Maps RFC 7591 `token_endpoint_auth_method`, `jwks`, and the RFC 8705
+/// subject metadata to the client model. `None` means inconsistent metadata.
 fn client_auth_from_body(
     method: Option<&str>,
     jwks: Option<&serde_json::Value>,
+    tls_subject: &TlsSubjectBody,
 ) -> Option<TokenEndpointAuth> {
+    let subject = tls_subject.subject().ok()?;
+    if subject.is_some() != (method == Some("tls_client_auth")) {
+        return None;
+    }
     match (method, jwks) {
         (None | Some("none"), None) => Some(TokenEndpointAuth::None),
+        (Some("tls_client_auth"), None) => {
+            subject.map(|subject| TokenEndpointAuth::TlsClientAuth { subject })
+        }
         (Some("private_key_jwt"), Some(jwks)) => Some(TokenEndpointAuth::PrivateKeyJwt {
             jwks: jwks.to_string(),
         }),
@@ -367,7 +407,11 @@ async fn admin_create_client(
     Json(body): Json<AdminCreateClientBody>,
 ) -> Response {
     let Some(token_endpoint_auth) =
-        client_auth_from_body(body.token_endpoint_auth_method.as_deref(), body.jwks.as_ref())
+        client_auth_from_body(
+        body.token_endpoint_auth_method.as_deref(),
+        body.jwks.as_ref(),
+        &body.tls_subject,
+    )
     else {
         return (
             StatusCode::BAD_REQUEST,
@@ -553,6 +597,8 @@ pub struct RegisterClientBody {
     pub require_signed_request_object: bool,
     #[serde(flatten)]
     pub policy: PolicyBody,
+    #[serde(flatten)]
+    pub tls_subject: TlsSubjectBody,
 }
 
 async fn register_client(
@@ -566,6 +612,16 @@ async fn register_client(
         jwks: body.jwks.map(|v| v.to_string()),
         require_signed_request_object: body.require_signed_request_object,
         policy: (&body.policy).into(),
+        tls_client_auth_subject: match body.tls_subject.subject() {
+            Ok(s) => s,
+            Err(err) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": err.code() })),
+                )
+                    .into_response()
+            }
+        },
     };
     match state.server.register_client(&req) {
         Ok(ok) => {

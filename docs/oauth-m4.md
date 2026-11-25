@@ -41,3 +41,9 @@ certificate (`curl --cert cli.pem --key cli.key ...`). Any client that
 presents a certificate at `/token` without DPoP receives an access token with
 `cnf.x5t#S256`. Vectors: `testvectors/mtls/`; real-TLS test:
 `rust/crates/oauth-http/tests/mtls.rs`.
+
+For the PKI method (`tls_client_auth`, ADR 0019), also set
+`AUTHCRAFT_TLS_CLIENT_CA=client-ca.pem`. Register with
+`"token_endpoint_auth_method":"tls_client_auth"` and one of
+`tls_client_auth_san_dns`, `_san_uri`, `_san_ip`, or `_san_email`; the client
+certificate must be issued directly by that CA and carry the registered SAN.

@@ -118,6 +118,14 @@ pub fn server_config_from_pem_files(
     Ok(server_config(certs, key)?)
 }
 
+/// Reads DER certificates from a PEM file (for `tls_client_auth` CAs).
+pub fn ders_from_pem_file(path: &str) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+    use rustls_pki_types::pem::PemObject;
+    Ok(CertificateDer::pem_file_iter(path)?
+        .map(|c| c.map(|c| c.as_ref().to_vec()))
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
 /// Serves `router` over TLS, tagging each request with the connection's
 /// client certificate. Runs until the listener fails.
 pub async fn serve_tls(

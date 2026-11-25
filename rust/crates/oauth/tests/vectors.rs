@@ -1031,6 +1031,20 @@ fn run_dcr_vector(path: &Path) {
                         "tls_client_certificate_bound_access_tokens",
                     ),
                 },
+                tls_client_auth_subject: match oauth::mtls::TlsClientAuthSubject::from_metadata(
+                    optional_string(steps, "tls_client_auth_subject_dn"),
+                    optional_string(steps, "tls_client_auth_san_dns"),
+                    optional_string(steps, "tls_client_auth_san_uri"),
+                    optional_string(steps, "tls_client_auth_san_ip"),
+                    optional_string(steps, "tls_client_auth_san_email"),
+                ) {
+                    Ok(subject) => subject,
+                    Err(e) => {
+                        assert!(!bool_field(expect, "ok"), "{case}: {e}");
+                        assert_eq!(e.code(), string(expect, "error"), "{case}");
+                        return;
+                    }
+                },
             });
             if bool_field(expect, "ok") {
                 result.unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -1049,6 +1063,7 @@ fn run_dcr_vector(path: &Path) {
                     jwks: None,
                     require_signed_request_object: false,
                     policy: Default::default(),
+                    tls_client_auth_subject: None,
                 })
                 .unwrap_or_else(|e| panic!("{case}: {e}"));
             let client_id = &reg.client_id;
@@ -1451,16 +1466,29 @@ fn introspect_shared_vectors() {
 
 /// DER certificates `A` / `B` from `testvectors/mtls/schema.json`.
 fn mtls_certs() -> (Vec<u8>, Vec<u8>) {
+    let (certs, _) = mtls_cert_map();
+    (certs["A"].clone(), certs["B"].clone())
+}
+
+/// Every certificate in `testvectors/mtls/schema.json` by name (self-signed
+/// `A`/`B` and the `pki-*` leaves), plus the `tls_client_auth` trust anchor.
+fn mtls_cert_map() -> (std::collections::HashMap<String, Vec<u8>>, Vec<u8>) {
     let text = fs::read(mtls_vectors_dir().join("schema.json")).unwrap();
     let schema = json::parse(&text).unwrap();
-    let certs = schema.get("x-authcraft-certs").expect("x-authcraft-certs");
-    let der = |name: &str| {
-        let c = certs.get(name).expect("cert");
-        let der = b64url::decode(string(c, "der_b64url")).unwrap();
-        assert_eq!(oauth::mtls::cert_thumbprint(&der), string(c, "x5t#S256"));
-        der
-    };
-    (der("A"), der("B"))
+    let mut out = std::collections::HashMap::new();
+    let pki = schema.get("x-authcraft-pki").expect("x-authcraft-pki");
+    for group in [
+        schema.get("x-authcraft-certs").expect("x-authcraft-certs"),
+        pki.get("certs").expect("pki certs"),
+    ] {
+        for (name, c) in group.as_object().expect("cert map") {
+            let der = b64url::decode(string(c, "der_b64url")).unwrap();
+            assert_eq!(oauth::mtls::cert_thumbprint(&der), string(c, "x5t#S256"));
+            out.insert(name.clone(), der);
+        }
+    }
+    let anchor = b64url::decode(string(pki.get("trust_anchor").unwrap(), "der_b64url")).unwrap();
+    (out, anchor)
 }
 
 fn run_mtls_vector(path: &Path) {
@@ -1476,25 +1504,35 @@ fn run_mtls_vector(path: &Path) {
     let now_auth = integer(steps, "now_authorize");
     let now = integer(steps, "now_token");
 
-    let (cert_a, cert_b) = mtls_certs();
+    let (certs, anchor) = mtls_cert_map();
     // `Some(None)` = step present with null (no certificate).
     let cert_step = |name: &str| -> Option<Option<Vec<u8>>> {
         match steps.get(name)? {
             Value::Null => Some(None),
-            Value::String(s) if s == "A" => Some(Some(cert_a.clone())),
-            Value::String(s) if s == "B" => Some(Some(cert_b.clone())),
+            Value::String(s) => Some(Some(
+                certs.get(s).unwrap_or_else(|| panic!("{case}: unknown cert {s}")).clone(),
+            )),
             other => panic!("{case}: bad {name}: {other:?}"),
         }
     };
+    let mut config = ServerConfig::new("https://auth.example", "api");
+    config.tls_client_auth_trust_anchors = vec![anchor];
+    let pki = |id: &str, subject: oauth::mtls::TlsClientAuthSubject| {
+        Client::tls_client_auth(id, vec!["https://pki.example/cb".into()], subject)
+    };
+    use oauth::mtls::TlsClientAuthSubject as Subject;
     let srv = AuthorizationServer::new(
-        ServerConfig::new("https://auth.example", "api"),
+        config,
         vec![
             Client::new("spa", vec!["https://app.example/cb".into()]),
             Client::self_signed_tls(
                 "tls",
                 vec!["https://tls.example/cb".into()],
-                vec![oauth::mtls::cert_thumbprint(&cert_a)],
+                vec![oauth::mtls::cert_thumbprint(&certs["A"])],
             ),
+            pki("pki", Subject::SanDns("client.example".into())),
+            pki("pki-uri", Subject::SanUri("https://client.example/id".into())),
+            pki("pki-other", Subject::SanDns("other.example".into())),
         ],
         generate_signing_key(Alg::EdDSA).expect("key"),
     );
@@ -1598,11 +1636,7 @@ fn run_mtls_vector(path: &Path) {
         .get("cnf")
         .and_then(|c| c.get("x5t#S256"))
         .and_then(Value::as_str);
-    let want = match expect.get("cnf_x5t") {
-        Some(Value::String(s)) if s == "A" => Some(oauth::mtls::cert_thumbprint(&cert_a)),
-        Some(Value::String(s)) if s == "B" => Some(oauth::mtls::cert_thumbprint(&cert_b)),
-        _ => None,
-    };
+    let want = optional_string(expect, "cnf_x5t").map(|s| oauth::mtls::cert_thumbprint(&certs[s]));
     assert_eq!(x5t, want.as_deref(), "{case}");
 }
 

@@ -92,6 +92,10 @@ fn jwt_claims(token: &str) -> Value {
 }
 
 async fn start_server() -> (SocketAddr, CertifiedKey<KeyPair>) {
+    start_server_with(AppState::demo_with_issuer(ISSUER)).await
+}
+
+async fn start_server_with(state: AppState) -> (SocketAddr, CertifiedKey<KeyPair>) {
     let server_ck = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
     let config = tls::server_config(
         vec![CertificateDer::from(server_ck.cert.der().to_vec())],
@@ -100,7 +104,7 @@ async fn start_server() -> (SocketAddr, CertifiedKey<KeyPair>) {
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let router = app(AppState::demo_with_issuer(ISSUER));
+    let router = app(state);
     tokio::spawn(tls::serve_tls(listener, router, Arc::new(config)));
     (addr, server_ck)
 }
@@ -230,4 +234,96 @@ async fn self_signed_mtls_client_gets_certificate_bound_token() {
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "wrong cert fails client auth first");
     let res = mtls.post(url("/token")).form(&refresh_form).send().await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+/// Authorize + login for `client_id` as alice; returns the code.
+async fn obtain_code(plain: &Client, base: &dyn Fn(&str) -> String, client_id: &str, redirect: &str) -> String {
+    let challenge = pkce::challenge_s256(VERIFIER).unwrap();
+    let authz = plain
+        .get(base(&format!(
+            "/authorize?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256",
+            enc(client_id),
+            enc(redirect),
+            enc(&challenge)
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authz.status(), StatusCode::SEE_OTHER);
+    let cookie = authz.headers()["set-cookie"].to_str().unwrap();
+    let cookie = cookie.split(';').next().unwrap().to_owned();
+    let login = plain
+        .post(base("/login"))
+        .header("cookie", cookie)
+        .form(&[("username", "alice"), ("password", "password")])
+        .send()
+        .await
+        .unwrap();
+    let location = login.headers()["location"].to_str().unwrap().to_owned();
+    query_param(&location, "code").expect("code")
+}
+
+#[tokio::test]
+async fn pki_tls_client_auth_over_real_tls() {
+    use rcgen::{
+        BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer,
+    };
+    // A client CA and a leaf it issues for SAN DNS client.example.
+    let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca_key = KeyPair::generate().unwrap();
+    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+    let issuer = Issuer::new(ca_params, ca_key);
+    let mut leaf_params = CertificateParams::new(vec!["client.example".to_owned()]).unwrap();
+    leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+    let leaf_key = KeyPair::generate().unwrap();
+    let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
+    let leaf_identity = Identity::from_pem(
+        format!("{}{}", leaf_key.serialize_pem(), leaf_cert.pem()).as_bytes(),
+    )
+    .unwrap();
+    // Same SAN, but self-signed: not issued by the trusted CA.
+    let impostor = generate_simple_self_signed(vec!["client.example".to_owned()]).unwrap();
+
+    let state = AppState::demo_tls(ISSUER, vec![ca_cert.der().to_vec()]);
+    let (addr, server_ck) = start_server_with(state).await;
+    let url = |path: &str| url_on(addr, path);
+    let plain = client(addr, &server_ck, None);
+    let pki = client(addr, &server_ck, Some(leaf_identity));
+    let fake = client(addr, &server_ck, Some(identity(&impostor)));
+
+    let redirect = "https://pki.example/cb";
+    let reg = plain
+        .post(url("/register"))
+        .json(&serde_json::json!({
+            "redirect_uris": [redirect],
+            "token_endpoint_auth_method": "tls_client_auth",
+            "tls_client_auth_san_dns": "client.example",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reg.status(), StatusCode::CREATED);
+    let reg: Value = reg.json().await.unwrap();
+    assert_eq!(reg["token_endpoint_auth_method"], "tls_client_auth");
+    let client_id = reg["client_id"].as_str().unwrap().to_owned();
+
+    let code = obtain_code(&plain, &url, &client_id, redirect).await;
+    let form = [
+        ("grant_type", "authorization_code"),
+        ("code", code.as_str()),
+        ("redirect_uri", redirect),
+        ("client_id", client_id.as_str()),
+        ("code_verifier", VERIFIER),
+    ];
+    let res = fake.post(url("/token")).form(&form).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "self-signed impostor");
+    let res = pki.post(url("/token")).form(&form).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let tok: Value = res.json().await.unwrap();
+    let access_token = tok["access_token"].as_str().unwrap();
+    assert_eq!(
+        jwt_claims(access_token)["cnf"]["x5t#S256"],
+        oauth::mtls::cert_thumbprint(leaf_cert.der()).as_str()
+    );
 }

@@ -346,8 +346,47 @@ async fn admin_rejects_inconsistent_client_metadata() {
         format!(r#"{{"client_id":"b","redirect_uris":["{REDIRECT}"],"token_endpoint_auth_method":"private_key_jwt"}}"#),
         // public resource server
         r#"{"client_id":"c","redirect_uris":[],"resource_server":true}"#.to_owned(),
+        // DPoP and certificate binding together (ADR 0018)
+        format!(r#"{{"client_id":"d","redirect_uris":["{REDIRECT}"],"dpop_bound_access_tokens":true,"tls_client_certificate_bound_access_tokens":true}}"#),
     ] {
         let res = send(&app, post_json("/admin/clients", Some(DEMO_ADMIN_TOKEN), body.clone())).await;
         assert_eq!(res.status, StatusCode::BAD_REQUEST, "{body}: {}", res.body);
     }
+}
+
+#[tokio::test]
+async fn registration_echoes_policy_and_token_requires_dpop() {
+    let app = app(AppState::demo());
+    let reg = send(
+        &app,
+        post_json(
+            "/register",
+            None,
+            format!(r#"{{"redirect_uris":["{REDIRECT}"],"dpop_bound_access_tokens":true}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(reg.status, StatusCode::CREATED, "{}", reg.body);
+    let reg = reg.json();
+    assert_eq!(reg["dpop_bound_access_tokens"], true);
+    assert_eq!(reg["require_pushed_authorization_requests"], false);
+    let client_id = reg["client_id"].as_str().unwrap().to_owned();
+
+    // Bearer token request from a dpop_bound_access_tokens client: 400.
+    let res = send(
+        &app,
+        post_form(
+            "/token",
+            &[
+                ("grant_type", "authorization_code"),
+                ("code", "unused"),
+                ("redirect_uri", REDIRECT),
+                ("client_id", &client_id),
+                ("code_verifier", VERIFIER),
+            ],
+        ),
+    )
+    .await;
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    assert_eq!(res.json()["error"], "invalid_request");
 }

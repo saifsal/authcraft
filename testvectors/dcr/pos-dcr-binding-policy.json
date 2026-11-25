@@ -1,0 +1,16 @@
+{
+  "id": "pos-dcr-binding-policy",
+  "source": "generated",
+  "description": "A client may register dpop_bound_access_tokens and require_pushed_authorization_requests (RFC 9449 \u00a75.2, RFC 9126 \u00a76).",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "https://dyn.example/cb"
+    ],
+    "dpop_bound_access_tokens": true,
+    "require_pushed_authorization_requests": true
+  },
+  "expect": {
+    "ok": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "pos-unconstrained-default",
+  "source": "generated",
+  "description": "Without enforcement, a public client still receives a bearer token (demo default).",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_id": "spa"
+  },
+  "expect": {
+    "ok": true,
+    "token_type": "Bearer",
+    "binding": null
+  }
+}

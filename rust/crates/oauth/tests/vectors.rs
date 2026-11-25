@@ -62,6 +62,10 @@ fn mtls_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/mtls")
 }
 
+fn enforcement_vectors_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/enforcement")
+}
+
 fn dcr_vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../testvectors/dcr")
 }
@@ -930,6 +934,7 @@ fn run_admin_vector(path: &Path) {
                     token_endpoint_auth: Default::default(),
                     require_signed_request_object: false,
                     resource_server: false,
+                    policy: Default::default(),
                 },
             )
             .unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -1015,6 +1020,17 @@ fn run_dcr_vector(path: &Path) {
                     .map(str::to_owned),
                 jwks: optional_string(steps, "jwks").map(str::to_owned),
                 require_signed_request_object: bool_field(steps, "require_signed_request_object"),
+                policy: oauth::ClientPolicy {
+                    require_pushed_authorization_requests: bool_field(
+                        steps,
+                        "require_pushed_authorization_requests",
+                    ),
+                    dpop_bound_access_tokens: bool_field(steps, "dpop_bound_access_tokens"),
+                    tls_client_certificate_bound_access_tokens: bool_field(
+                        steps,
+                        "tls_client_certificate_bound_access_tokens",
+                    ),
+                },
             });
             if bool_field(expect, "ok") {
                 result.unwrap_or_else(|e| panic!("{case}: {e}"));
@@ -1032,6 +1048,7 @@ fn run_dcr_vector(path: &Path) {
                     token_endpoint_auth_method: Some("none".into()),
                     jwks: None,
                     require_signed_request_object: false,
+                    policy: Default::default(),
                 })
                 .unwrap_or_else(|e| panic!("{case}: {e}"));
             let client_id = &reg.client_id;
@@ -1595,5 +1612,156 @@ fn mtls_shared_vectors() {
     assert!(!files.is_empty(), "no mtls vectors");
     for f in files {
         run_mtls_vector(&f);
+    }
+}
+
+fn run_enforcement_vector(path: &Path) {
+    let case = path.display().to_string();
+    let text = fs::read(path).unwrap_or_else(|e| panic!("{case}: {e}"));
+    let root = json::parse(&text).unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(string(&root, "id"), path.file_stem().unwrap().to_str().unwrap());
+    let steps = root.get("steps").expect("steps");
+    let expect = root.get("expect").expect("expect");
+    let client_id = string(steps, "client_id");
+    let redirect_uri = "https://app.example/cb";
+    let verifier = string(steps, "code_verifier");
+    let now_auth = integer(steps, "now_authorize");
+    let now = integer(steps, "now_token");
+
+    let mut config = ServerConfig::new("https://auth.example", "api");
+    config.require_sender_constrained_tokens =
+        bool_field(steps, "server_require_sender_constrained");
+    let with_policy = |id: &str, policy: oauth::ClientPolicy| Client {
+        policy,
+        ..Client::new(id, vec![redirect_uri.into()])
+    };
+    let srv = AuthorizationServer::new(
+        config,
+        vec![
+            Client::new("spa", vec![redirect_uri.into()]),
+            with_policy(
+                "par-only",
+                oauth::ClientPolicy {
+                    require_pushed_authorization_requests: true,
+                    ..Default::default()
+                },
+            ),
+            with_policy(
+                "dpop-only",
+                oauth::ClientPolicy {
+                    dpop_bound_access_tokens: true,
+                    ..Default::default()
+                },
+            ),
+            with_policy(
+                "mtls-only",
+                oauth::ClientPolicy {
+                    tls_client_certificate_bound_access_tokens: true,
+                    ..Default::default()
+                },
+            ),
+        ],
+        generate_signing_key(Alg::EdDSA).expect("key"),
+    );
+    let fail = |phase: &str, err: OAuthError| {
+        assert!(!bool_field(expect, "ok"), "{case}: {phase} failed: {err}");
+        assert_eq!(string(expect, "phase"), phase, "{case}");
+        assert_eq!(err.code(), string(expect, "error"), "{case}");
+    };
+
+    let params = AuthorizeRequest {
+        response_type: "code".into(),
+        client_id: client_id.into(),
+        redirect_uri: redirect_uri.into(),
+        code_challenge: pkce::challenge_s256(verifier).unwrap(),
+        code_challenge_method: "S256".into(),
+        state: None,
+        scope: Some("read".into()),
+        nonce: None,
+        request_uri: None,
+        request: None,
+    };
+    let pending = if bool_field(steps, "use_par") {
+        let par = srv
+            .push_authorization(&params, &oauth::ClientCredentials::default(), now_auth)
+            .unwrap_or_else(|e| panic!("{case}: par: {e}"));
+        srv.begin_authorize(
+            &AuthorizeRequest {
+                request_uri: Some(par.request_uri),
+                ..params.clone()
+            },
+            now_auth,
+        )
+    } else {
+        srv.begin_authorize(&params, now_auth)
+    };
+    let pending = match pending {
+        Ok(p) => p,
+        Err(e) => return fail("authorize", e),
+    };
+    let code = srv
+        .finish_authorize(pending, &LoginSubject::new(string(steps, "subject")), now_auth)
+        .unwrap_or_else(|e| panic!("{case}: {e}"))
+        .code;
+
+    let token_htu = "https://auth.example/token";
+    let dpop_key = generate_signing_key(Alg::EdDSA).unwrap();
+    let make_proof = |jti: &str| {
+        let nonce = srv.dpop_nonce().unwrap();
+        make_dpop_proof("POST", token_htu, now, jti, &dpop_key.pkcs8, &dpop_key.public, Some(&nonce))
+    };
+    let dpop = bool_field(steps, "dpop").then(|| make_proof("enf-1"));
+    let (cert_a, _) = mtls_certs();
+    let cert = optional_string(steps, "token_cert").map(|_| cert_a.clone());
+    let req = TokenRequest {
+        grant_type: "authorization_code".into(),
+        code,
+        redirect_uri: redirect_uri.into(),
+        client_id: client_id.into(),
+        code_verifier: verifier.into(),
+        refresh_token: String::new(),
+        client_assertion_type: None,
+        client_assertion: None,
+    };
+    let tok = match srv.exchange_token_tls(&req, now, dpop.as_deref(), token_htu, cert.as_deref()) {
+        Ok(t) => t,
+        Err(e) => {
+            fail("token", e);
+            // Enforcement runs before redemption: a compliant retry succeeds.
+            let retry_dpop = (client_id == "dpop-only" || client_id == "spa")
+                .then(|| make_proof("enf-retry"));
+            let retry_cert = (client_id == "mtls-only").then(|| cert_a.clone());
+            srv.exchange_token_tls(
+                &req,
+                now,
+                retry_dpop.as_deref(),
+                token_htu,
+                retry_cert.as_deref(),
+            )
+            .unwrap_or_else(|e| panic!("{case}: compliant retry: {e}"));
+            return;
+        }
+    };
+
+    assert!(bool_field(expect, "ok"), "{case}: expected a failure");
+    assert_eq!(tok.token_type, string(expect, "token_type"), "{case}");
+    let payload = tok.access_token.split('.').nth(1).unwrap();
+    let claims = json::parse(&b64url::decode(payload).unwrap()).unwrap();
+    let cnf = claims.get("cnf");
+    match optional_string(expect, "binding") {
+        None => assert!(cnf.is_none(), "{case}: unexpected cnf"),
+        Some(member) => assert!(
+            cnf.and_then(|c| c.get(member)).is_some(),
+            "{case}: missing cnf.{member}"
+        ),
+    }
+}
+
+#[test]
+fn enforcement_shared_vectors() {
+    let files = load_json_vectors(&enforcement_vectors_dir());
+    assert!(!files.is_empty(), "no enforcement vectors");
+    for f in files {
+        run_enforcement_vector(&f);
     }
 }

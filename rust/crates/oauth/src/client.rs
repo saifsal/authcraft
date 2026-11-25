@@ -28,6 +28,28 @@ impl TokenEndpointAuth {
     }
 }
 
+/// Per-client enforcement metadata (ADR 0018). Each flag uses the RFC client
+/// metadata name and makes an optional mechanism mandatory for that client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ClientPolicy {
+    /// RFC 9126 §6: authorize parameters must come through PAR.
+    pub require_pushed_authorization_requests: bool,
+    /// RFC 9449 §5.2: every token request must carry a DPoP proof.
+    pub dpop_bound_access_tokens: bool,
+    /// RFC 8705 §3.4: every token request must present a TLS client
+    /// certificate, and tokens are bound to it.
+    pub tls_client_certificate_bound_access_tokens: bool,
+}
+
+impl ClientPolicy {
+    /// DPoP and certificate binding are mutually exclusive for one client:
+    /// with both, DPoP would win and the certificate requirement would be
+    /// meaningless.
+    pub fn is_consistent(&self) -> bool {
+        !(self.dpop_bound_access_tokens && self.tls_client_certificate_bound_access_tokens)
+    }
+}
+
 /// A client with an exact redirect URI allowlist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Client {
@@ -42,6 +64,8 @@ pub struct Client {
     /// resource, ADR 0016). Set only through the admin API; requires
     /// `private_key_jwt`. Other clients introspect only their own tokens.
     pub resource_server: bool,
+    /// Enforcement flags (ADR 0018).
+    pub policy: ClientPolicy,
 }
 
 impl Client {
@@ -54,6 +78,7 @@ impl Client {
             token_endpoint_auth: TokenEndpointAuth::None,
             require_signed_request_object: false,
             resource_server: false,
+            policy: ClientPolicy::default(),
         }
     }
 

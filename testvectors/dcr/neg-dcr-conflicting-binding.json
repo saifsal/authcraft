@@ -1,0 +1,17 @@
+{
+  "id": "neg-dcr-conflicting-binding",
+  "source": "generated",
+  "description": "dpop_bound_access_tokens together with tls_client_certificate_bound_access_tokens is rejected.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "https://dyn.example/cb"
+    ],
+    "dpop_bound_access_tokens": true,
+    "tls_client_certificate_bound_access_tokens": true
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

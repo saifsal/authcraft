@@ -1,0 +1,19 @@
+{
+  "id": "neg-tls-bound-with-dpop",
+  "source": "generated",
+  "description": "A tls_client_certificate_bound_access_tokens client that also sends DPoP is refused: DPoP would replace the certificate binding.",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_id": "mtls-only",
+    "token_cert": "A",
+    "dpop": true
+  },
+  "expect": {
+    "ok": false,
+    "phase": "token",
+    "error": "invalid_request"
+  }
+}

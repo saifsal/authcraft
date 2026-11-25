@@ -1,0 +1,19 @@
+{
+  "id": "pos-server-requires-binding-dpop",
+  "source": "generated",
+  "description": "With require_sender_constrained_tokens, a DPoP proof satisfies the requirement.",
+  "steps": {
+    "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "subject": "alice",
+    "now_authorize": 1000,
+    "now_token": 1001,
+    "client_id": "spa",
+    "server_require_sender_constrained": true,
+    "dpop": true
+  },
+  "expect": {
+    "ok": true,
+    "token_type": "DPoP",
+    "binding": "jkt"
+  }
+}

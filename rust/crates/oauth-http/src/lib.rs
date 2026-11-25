@@ -17,7 +17,7 @@ use axum::{Json, Router};
 use jose::alg::Alg;
 use jose::signing::{generate_signing_key, SigningKey};
 use oauth::{
-    AuthorizationServer, AuthorizeRequest, Client, ClientCredentials, DirectoryBind, DynamicClientRequest,
+    AuthorizationServer, AuthorizeRequest, Client, ClientCredentials, ClientPolicy, DirectoryBind, DynamicClientRequest,
     LoginSubject, OAuthError, OidcRpConfig, PendingAuthorization, ServerConfig, TokenRequest,
     TokenEndpointAuth, TokenTypeHint, DEMO_ADMIN_TOKEN,
 };
@@ -256,16 +256,7 @@ async fn admin_list_clients(State(state): State<AppState>, headers: HeaderMap) -
         Ok(clients) => {
             let body: Vec<_> = clients
                 .into_iter()
-                .map(|c| {
-                    serde_json::json!({
-                        "client_id": c.client_id,
-                        "redirect_uris": c.redirect_uris,
-                        "client_name": c.client_name,
-                        "token_endpoint_auth_method": c.token_endpoint_auth.method(),
-                        "require_signed_request_object": c.require_signed_request_object,
-                        "resource_server": c.resource_server,
-                    })
-                })
+                .map(|c| client_json(&c))
                 .collect();
             Json(body).into_response()
         }
@@ -303,6 +294,52 @@ pub struct AdminCreateClientBody {
     /// May introspect any token (ADR 0016); requires `private_key_jwt`.
     #[serde(default)]
     pub resource_server: bool,
+    #[serde(flatten)]
+    pub policy: PolicyBody,
+}
+
+/// RFC 9126 / RFC 9449 / RFC 8705 client metadata flags (ADR 0018).
+#[derive(Debug, Default, Deserialize)]
+pub struct PolicyBody {
+    #[serde(default)]
+    pub require_pushed_authorization_requests: bool,
+    #[serde(default)]
+    pub dpop_bound_access_tokens: bool,
+    #[serde(default)]
+    pub tls_client_certificate_bound_access_tokens: bool,
+}
+
+impl From<&PolicyBody> for ClientPolicy {
+    fn from(b: &PolicyBody) -> Self {
+        ClientPolicy {
+            require_pushed_authorization_requests: b.require_pushed_authorization_requests,
+            dpop_bound_access_tokens: b.dpop_bound_access_tokens,
+            tls_client_certificate_bound_access_tokens: b
+                .tls_client_certificate_bound_access_tokens,
+        }
+    }
+}
+
+/// Admin API view of a client (no key material).
+fn client_json(c: &Client) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "client_id": c.client_id,
+        "redirect_uris": c.redirect_uris,
+        "client_name": c.client_name,
+        "token_endpoint_auth_method": c.token_endpoint_auth.method(),
+        "require_signed_request_object": c.require_signed_request_object,
+        "resource_server": c.resource_server,
+    });
+    policy_json(&mut body, &c.policy);
+    body
+}
+
+/// Echoes a client's policy flags into a JSON response body.
+fn policy_json(body: &mut serde_json::Value, p: &ClientPolicy) {
+    body["require_pushed_authorization_requests"] = p.require_pushed_authorization_requests.into();
+    body["dpop_bound_access_tokens"] = p.dpop_bound_access_tokens.into();
+    body["tls_client_certificate_bound_access_tokens"] =
+        p.tls_client_certificate_bound_access_tokens.into();
 }
 
 /// Maps RFC 7591 `token_endpoint_auth_method` + `jwks` to the client model.
@@ -345,20 +382,10 @@ async fn admin_create_client(
         token_endpoint_auth,
         require_signed_request_object: body.require_signed_request_object,
         resource_server: body.resource_server,
+        policy: (&body.policy).into(),
     };
     match state.server.create_client(admin_bearer(&headers), client) {
-        Ok(c) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "client_id": c.client_id,
-                "redirect_uris": c.redirect_uris,
-                "client_name": c.client_name,
-                "token_endpoint_auth_method": c.token_endpoint_auth.method(),
-                "require_signed_request_object": c.require_signed_request_object,
-                "resource_server": c.resource_server,
-            })),
-        )
-            .into_response(),
+        Ok(c) => (StatusCode::CREATED, Json(client_json(&c))).into_response(),
         Err(oauth::AdminError::Unauthorized) => admin_unauthorized(),
         Err(oauth::AdminError::Conflict) => (
             StatusCode::CONFLICT,
@@ -524,6 +551,8 @@ pub struct RegisterClientBody {
     /// RFC 9101 §10.5 (ADR 0015 B2).
     #[serde(default)]
     pub require_signed_request_object: bool,
+    #[serde(flatten)]
+    pub policy: PolicyBody,
 }
 
 async fn register_client(
@@ -536,11 +565,11 @@ async fn register_client(
         token_endpoint_auth_method: body.token_endpoint_auth_method,
         jwks: body.jwks.map(|v| v.to_string()),
         require_signed_request_object: body.require_signed_request_object,
+        policy: (&body.policy).into(),
     };
     match state.server.register_client(&req) {
-        Ok(ok) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
+        Ok(ok) => {
+            let mut body = serde_json::json!({
                 "client_id": ok.client_id,
                 "redirect_uris": ok.redirect_uris,
                 "client_name": ok.client_name,
@@ -548,9 +577,10 @@ async fn register_client(
                 "require_signed_request_object": ok.require_signed_request_object,
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
-            })),
-        )
-            .into_response(),
+            });
+            policy_json(&mut body, &ok.policy);
+            (StatusCode::CREATED, Json(body)).into_response()
+        }
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": err.code() })),

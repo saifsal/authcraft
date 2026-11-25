@@ -268,6 +268,7 @@ Useful design notes while changing verification:
 - [`docs/adr/0015-jar-request-objects.md`](docs/adr/0015-jar-request-objects.md) — signed request objects (RFC 9101 JAR).
 - [`docs/adr/0016-protected-introspection.md`](docs/adr/0016-protected-introspection.md) — authenticated `/introspect` and resource-server clients.
 - [`docs/adr/0017-mutual-tls.md`](docs/adr/0017-mutual-tls.md) — optional HTTPS listener and OAuth mutual TLS (RFC 8705).
+- [`docs/adr/0018-enforcement-metadata.md`](docs/adr/0018-enforcement-metadata.md) — per-client mandatory PAR, DPoP, and certificate binding.
 - [`docs/oauth-m8.md`](docs/oauth-m8.md) — M8 assurance runbook.
 - [`docs/openid-conformance-checklist.md`](docs/openid-conformance-checklist.md) — OIDF-style OP expectations vs authcraft.
 - [`docs/oauth-m3.md`](docs/oauth-m3.md) — M3 token lifecycle runbook.

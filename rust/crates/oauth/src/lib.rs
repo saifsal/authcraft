@@ -25,7 +25,7 @@ pub mod totp;
 pub mod users;
 pub mod webauthn_mfa;
 
-pub use client::{Client, ClientRegistry, TokenEndpointAuth};
+pub use client::{Client, ClientPolicy, ClientRegistry, TokenEndpointAuth};
 pub use client_auth::CLIENT_ASSERTION_TYPE_JWT_BEARER;
 pub use error::OAuthError;
 pub use id_token::{at_hash_eddsa, scope_has_openid};

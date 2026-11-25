@@ -10,7 +10,7 @@ use jose::signing::SigningKey;
 use jose::verify::{self, Policy};
 use ring::rand::{SecureRandom, SystemRandom};
 
-use crate::client::{Client, ClientRegistry, TokenEndpointAuth};
+use crate::client::{Client, ClientPolicy, ClientRegistry, TokenEndpointAuth};
 use crate::client_auth::{self, ClientAssertionJtiCache, CLIENT_ASSERTION_TYPE_JWT_BEARER};
 use crate::code::{AuthorizationCode, CodeStore, DEFAULT_CODE_TTL_SECS};
 use crate::denylist::JtiDenylist;
@@ -55,6 +55,9 @@ pub struct ServerConfig {
     /// When true, client assertions must carry header
     /// `typ: client-authentication+jwt` (ADR 0014 B3).
     pub require_client_assertion_typ: bool,
+    /// When true, every token request must be sender-constrained with DPoP
+    /// or a TLS client certificate (ADR 0018). Bearer-only requests fail.
+    pub require_sender_constrained_tokens: bool,
 }
 
 /// Published demo admin bearer token (educational only).
@@ -81,6 +84,7 @@ impl ServerConfig {
             rp_origin,
             admin_token: String::new(),
             require_client_assertion_typ: false,
+            require_sender_constrained_tokens: false,
         }
     }
 }
@@ -100,7 +104,7 @@ pub struct TotpEnrollment {
 }
 
 /// RFC 7591 dynamic client registration request (ADR 0011 B2 / ADR 0014).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DynamicClientRequest {
     pub redirect_uris: Vec<String>,
     pub client_name: Option<String>,
@@ -110,6 +114,8 @@ pub struct DynamicClientRequest {
     pub jwks: Option<String>,
     /// RFC 9101 §10.5; requires `private_key_jwt` (ADR 0015 B2).
     pub require_signed_request_object: bool,
+    /// RFC 9126 / RFC 9449 / RFC 8705 enforcement metadata (ADR 0018).
+    pub policy: ClientPolicy,
 }
 
 /// RFC 7591 registration response fields.
@@ -120,6 +126,7 @@ pub struct DynamicClientSuccess {
     pub client_name: Option<String>,
     pub token_endpoint_auth_method: &'static str,
     pub require_signed_request_object: bool,
+    pub policy: ClientPolicy,
 }
 
 /// Validated authorize request awaiting resource-owner authentication.
@@ -450,7 +457,37 @@ impl AuthorizationServer {
         Ok(client)
     }
 
+    /// Enforces mandatory sender-constraint before anything is consumed
+    /// (ADR 0018): per-client `dpop_bound_access_tokens` and
+    /// `tls_client_certificate_bound_access_tokens`, and server-wide
+    /// `require_sender_constrained_tokens`.
+    fn check_sender_constraint(
+        &self,
+        client: &Client,
+        dpop_proof: Option<&str>,
+        tls_client_cert: Option<&[u8]>,
+    ) -> Result<(), OAuthError> {
+        let has_dpop = dpop_proof.is_some_and(|p| !p.is_empty());
+        let has_cert = tls_client_cert.is_some();
+        let p = &client.policy;
+        if p.dpop_bound_access_tokens && !has_dpop {
+            return Err(OAuthError::InvalidRequest);
+        }
+        // DPoP takes precedence over the certificate (ADR 0017), so a
+        // certificate-bound client must not send a DPoP proof.
+        if p.tls_client_certificate_bound_access_tokens && (!has_cert || has_dpop) {
+            return Err(OAuthError::InvalidRequest);
+        }
+        if self.config.require_sender_constrained_tokens && !has_dpop && !has_cert {
+            return Err(OAuthError::InvalidRequest);
+        }
+        Ok(())
+    }
+
     fn validate_client_metadata(client: &Client) -> bool {
+        if !client.policy.is_consistent() {
+            return false;
+        }
         match &client.token_endpoint_auth {
             // Request objects are verified with a signing JWKS (ADR 0015).
             TokenEndpointAuth::SelfSignedTlsClientAuth { cert_thumbprints } => {
@@ -846,6 +883,7 @@ impl AuthorizationServer {
             require_signed_request_object: req.require_signed_request_object,
             // RFC 7591 registration cannot grant the resource-server role.
             resource_server: false,
+            policy: req.policy,
         };
         if !Self::validate_client_metadata(&client) {
             return Err(OAuthError::InvalidRequest);
@@ -859,6 +897,7 @@ impl AuthorizationServer {
             client_name: req.client_name.clone(),
             token_endpoint_auth_method,
             require_signed_request_object: req.require_signed_request_object,
+            policy: req.policy,
         })
     }
 
@@ -1083,6 +1122,14 @@ impl AuthorizationServer {
         if self.config.require_par {
             return Err(OAuthError::InvalidRequest);
         }
+        // RFC 9126 §6 per-client requirement (ADR 0018). Unknown clients fall
+        // through and fail in `validate_authorize_params`.
+        if matches!(
+            self.lookup_client(&req.client_id),
+            Ok(c) if c.policy.require_pushed_authorization_requests
+        ) {
+            return Err(OAuthError::InvalidRequest);
+        }
         self.check_signed_request_required(req)?;
         let req = self.expand_request_object(req, now)?;
         self.validate_authorize_params(&req)
@@ -1205,13 +1252,14 @@ impl AuthorizationServer {
         token_htu: &str,
         tls_client_cert: Option<&[u8]>,
     ) -> Result<TokenSuccess, OAuthError> {
-        self.authenticate_client(
+        let client = self.authenticate_client(
             &req.client_id,
             req.client_assertion_type.as_deref(),
             req.client_assertion.as_deref(),
             tls_client_cert,
             now,
         )?;
+        self.check_sender_constraint(&client, dpop_proof, tls_client_cert)?;
 
         // DPoP (including nonce challenge) before redeem so `use_dpop_nonce`
         // does not consume the authorization code.
@@ -1299,13 +1347,14 @@ impl AuthorizationServer {
         token_htu: &str,
         tls_client_cert: Option<&[u8]>,
     ) -> Result<TokenSuccess, OAuthError> {
-        self.authenticate_client(
+        let client = self.authenticate_client(
             &req.client_id,
             req.client_assertion_type.as_deref(),
             req.client_assertion.as_deref(),
             tls_client_cert,
             now,
         )?;
+        self.check_sender_constraint(&client, dpop_proof, tls_client_cert)?;
         if req.refresh_token.is_empty() {
             return Err(OAuthError::InvalidRequest);
         }
@@ -2543,6 +2592,7 @@ mod tests {
                 token_endpoint_auth_method: Some("private_key_jwt".into()),
                 jwks: Some(jwks.clone()),
                 require_signed_request_object: false,
+                policy: Default::default(),
             })
             .unwrap();
         assert_eq!(ok.token_endpoint_auth_method, "private_key_jwt");
@@ -2553,6 +2603,7 @@ mod tests {
                 token_endpoint_auth_method: None,
                 jwks: Some(jwks),
                 require_signed_request_object: false,
+                policy: Default::default(),
             }),
             Err(OAuthError::InvalidRequest)
         );

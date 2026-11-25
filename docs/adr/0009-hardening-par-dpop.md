@@ -21,7 +21,9 @@ access tokens. M4 adds those without confidential-client auth or real login.
 4. PAR is **optional** by default (`ServerConfig.require_par = false`);
    discovery mirrors that as `require_pushed_authorization_requests`.
    When `require_par` is true, `/authorize` without `request_uri` is
-   `invalid_request`.
+   `invalid_request`. Per-client `require_pushed_authorization_requests` and
+   mandatory DPoP (`dpop_bound_access_tokens`) are in
+   [ADR 0018](0018-enforcement-metadata.md).
 5. In-memory `ParStore` only.
 
 ## Amendments

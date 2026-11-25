@@ -409,8 +409,11 @@ impl AuthorizationServer {
         if expected.is_empty() {
             return Err(AdminError::Unauthorized);
         }
+        // Compare SHA-256 digests in constant time so neither the content nor
+        // the length of the admin token leaks through timing.
+        let digest = |s: &str| ring::digest::digest(&ring::digest::SHA256, s.as_bytes());
         match token {
-            Some(t) if t == expected => Ok(()),
+            Some(t) if totp::constant_eq(digest(t).as_ref(), digest(expected).as_ref()) => Ok(()),
             _ => Err(AdminError::Unauthorized),
         }
     }

@@ -115,7 +115,7 @@ pub fn matching_step(secret: &[u8], code: &str, now: i64) -> Option<i64> {
     matched
 }
 
-fn constant_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

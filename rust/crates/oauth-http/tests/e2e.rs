@@ -305,6 +305,9 @@ async fn authorize_login_token_verifies() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     assert_eq!(res.headers().get(header::LOCATION).unwrap(), "/login");
+    let raw_cookie = res.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+    assert!(raw_cookie.contains("HttpOnly") && raw_cookie.contains("SameSite=Lax"));
+    assert!(!raw_cookie.contains("Secure"), "plain HTTP cookie must not claim Secure");
     let cookie = cookie_from(&res);
 
     let res = app

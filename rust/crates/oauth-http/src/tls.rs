@@ -27,7 +27,7 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
-use crate::TlsClientCert;
+use crate::{Https, TlsClientCert};
 
 /// Accepts any client certificate whose handshake signature verifies.
 #[derive(Debug)]
@@ -165,7 +165,11 @@ pub async fn serve_tls(
                 .peer_certificates()
                 .and_then(|chain| chain.first())
                 .map(|c| c.as_ref().to_vec());
-            let service = TowerToHyperService::new(router.layer(Extension(TlsClientCert(cert))));
+            let service = TowerToHyperService::new(
+                router
+                    .layer(Extension(TlsClientCert(cert)))
+                    .layer(Extension(Https)),
+            );
             if let Err(e) = auto::Builder::new(TokioExecutor::new())
                 .serve_connection(TokioIo::new(stream), service)
                 .await

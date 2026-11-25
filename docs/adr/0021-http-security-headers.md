@@ -1,6 +1,6 @@
 # ADR 0021: HTTP security headers
 
-- **Status:** Accepted
+- **Status:** Accepted (amended as slices land)
 - **Date:** 2026-11-25
 
 ## Context
@@ -28,6 +28,19 @@ The optional HTTPS listener (ADR 0017) also sent no HSTS header.
 4. Tests: `oauth-http/tests/confidential.rs` (framing, referrer, cache
    headers; unsupported `password` / `client_credentials` grants) and
    `tests/mtls.rs` (HSTS over real TLS).
+
+## Amendments
+
+### B2 — Login cookie and admin token
+
+1. `serve_tls` marks requests with an `Https` extension. The
+   `authcraft_login` cookie then carries `Secure` in addition to `HttpOnly`
+   and `SameSite=Lax`, so the browser never sends the login ticket over plain
+   HTTP. Plain-HTTP demo mode leaves `Secure` off, since browsers would drop
+   the cookie.
+2. The admin bearer token (ADR 0011) is compared as SHA-256 digests in
+   constant time instead of with `==`, so timing reveals neither its bytes
+   nor its length.
 
 ## Consequences
 

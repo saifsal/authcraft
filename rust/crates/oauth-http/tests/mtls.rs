@@ -167,6 +167,7 @@ async fn self_signed_mtls_client_gets_certificate_bound_token() {
         .unwrap();
     assert_eq!(authz.status(), StatusCode::SEE_OTHER);
     let cookie = authz.headers()["set-cookie"].to_str().unwrap();
+    assert!(cookie.contains("; Secure"), "HTTPS login cookie is Secure: {cookie}");
     let cookie = cookie.split(';').next().unwrap().to_owned();
     let login = plain
         .post(url("/login"))

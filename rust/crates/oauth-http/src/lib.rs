@@ -312,6 +312,10 @@ async fn admin_list_clients(State(state): State<AppState>, headers: HeaderMap) -
 #[derive(Debug, Clone, Default)]
 pub struct TlsClientCert(pub Option<Vec<u8>>);
 
+/// Marker extension: the request arrived over HTTPS ([`serve_tls`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Https;
+
 fn tls_cert(ext: &Option<Extension<TlsClientCert>>) -> Option<Vec<u8>> {
     ext.as_ref().and_then(|Extension(c)| c.0.clone())
 }
@@ -556,6 +560,7 @@ pub struct AuthorizeQuery {
 
 async fn authorize(
     State(state): State<AppState>,
+    https: Option<Extension<Https>>,
     Query(q): Query<AuthorizeQuery>,
 ) -> Response {
     let req = AuthorizeRequest {
@@ -583,7 +588,10 @@ async fn authorize(
             headers.insert(
                 header::SET_COOKIE,
                 HeaderValue::from_str(&format!(
-                    "authcraft_login={ticket}; Path=/; HttpOnly; SameSite=Lax"
+                    "authcraft_login={ticket}; Path=/; HttpOnly; SameSite=Lax{}",
+                    // RFC 6265 §4.1.2.5: never send the ticket over plain HTTP
+                    // once the AS is served over HTTPS (ADR 0021).
+                    if https.is_some() { "; Secure" } else { "" }
                 ))
                 .expect("cookie header"),
             );

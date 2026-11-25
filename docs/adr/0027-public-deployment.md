@@ -19,6 +19,10 @@ on 8080, tacto 8081, glossa 8082).
    linked by origin), links to sign up / sign in or the account page, the
    issuer, discovery, and JWKS URLs, and a plain statement that it has not had
    an external security audit. Same script-free layout as the other pages.
+   The favicon (a keyhole on the accent blue) is `assets/favicon.svg`,
+   with `favicon.ico` (16/32/48 px) generated from it by
+   `assets/make-favicon.py`; both are embedded in the binary and served with
+   a one-week cache.
 2. **No consent screen.** Every production client is configured by the
    operator (ADR 0023) and is first-party (tacto, glossa). Third-party
    clients would need consent first.

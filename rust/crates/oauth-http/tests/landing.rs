@@ -46,3 +46,16 @@ async fn demo_clients_without_https_or_names_are_not_listed() {
     let (_, body) = landing(AppState::demo()).await;
     assert!(!body.contains("Sign in with authcraft on"));
 }
+
+#[tokio::test]
+async fn favicons_are_served_with_cache_headers() {
+    for (path, ctype) in [("/favicon.svg", "image/svg+xml"), ("/favicon.ico", "image/x-icon")] {
+        let res = app(AppState::demo())
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        assert_eq!(res.headers()["content-type"], ctype);
+        assert_eq!(res.headers()["cache-control"], "public, max-age=604800");
+    }
+}

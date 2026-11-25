@@ -231,6 +231,14 @@ pub fn app(state: AppState) -> Router {
                 .delete(scim_delete_user),
         )
         .route("/", get(landing))
+        .route(
+            "/favicon.svg",
+            get(|| async { pages::asset(pages::FAVICON_SVG, "image/svg+xml") }),
+        )
+        .route(
+            "/favicon.ico",
+            get(|| async { pages::asset(pages::FAVICON_ICO, "image/x-icon") }),
+        )
         .route("/account", get(account_get))
         .route("/logout", get(logout_get).post(logout_post))
         .merge(accounts::routes())

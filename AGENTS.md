@@ -103,6 +103,7 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── src/mailer.rs                  # outbox + Resend worker (ported from glossa)
 │   │   ├── src/ratelimit.rs, src/pages.rs # fixed-window limits; shared HTML layout
 │   │   ├── src/session.rs                 # SSO sessions + expiring login tickets (ADR 0026)
+│   │   ├── assets/                        # favicon.svg (source), favicon.ico, make-favicon.py
 │   │   ├── tests/e2e.rs                   # authorize → login → token → jose verify
 │   │   ├── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
 │   │   ├── tests/mtls.rs                  # self-signed mTLS + bound tokens over real TLS

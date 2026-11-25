@@ -87,19 +87,32 @@ pub fn generate_code(secret: &[u8], now: i64) -> String {
 
 /// Verify a user-supplied code with ±[`TOTP_SKEW_STEPS`] window.
 pub fn verify_code(secret: &[u8], code: &str, now: i64) -> bool {
+    matching_step(secret, code, now).is_some()
+}
+
+/// Time step (RFC 6238 counter) that `code` matches within the
+/// ±[`TOTP_SKEW_STEPS`] window, or `None`. Callers use it to refuse a code
+/// for a step already accepted (RFC 6238 §5.2).
+pub fn matching_step(secret: &[u8], code: &str, now: i64) -> Option<i64> {
     let code = code.trim();
     if code.len() != TOTP_DIGITS as usize || !code.chars().all(|c| c.is_ascii_digit()) {
-        return false;
+        return None;
     }
     let center = now / TOTP_STEP_SECS;
+    let mut matched = None;
+    // Check every step (no early exit) so timing does not reveal which matched.
     for delta in -TOTP_SKEW_STEPS..=TOTP_SKEW_STEPS {
-        let counter = (center + delta) as u64;
-        let expected = format!("{:0width$}", hotp(secret, counter), width = TOTP_DIGITS as usize);
+        let counter = center + delta;
+        let expected = format!(
+            "{:0width$}",
+            hotp(secret, counter as u64),
+            width = TOTP_DIGITS as usize
+        );
         if constant_eq(code.as_bytes(), expected.as_bytes()) {
-            return true;
+            matched = Some(counter);
         }
     }
-    false
+    matched
 }
 
 fn constant_eq(a: &[u8], b: &[u8]) -> bool {

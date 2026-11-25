@@ -1,0 +1,19 @@
+{
+  "id": "neg-totp-locked",
+  "source": "generated",
+  "description": "After 5 failed codes the correct code is refused with too_many_attempts until the lockout ends.",
+  "steps": {
+    "action": "totp",
+    "username": "alice",
+    "password": "password",
+    "seed_password": "password",
+    "subject": "alice",
+    "totp_secret": "JBSWY3DPEHPK3PXP",
+    "now": 1111111111,
+    "prior_failures": 5
+  },
+  "expect": {
+    "ok": false,
+    "error": "too_many_attempts"
+  }
+}

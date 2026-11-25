@@ -344,6 +344,23 @@ pub struct AuthorizationServer {
     dpop_nonce: Mutex<String>,
     users: Mutex<UserStore>,
     webauthn: WebauthnMfa,
+    /// Second-factor throttling and TOTP replay state (ADR 0022).
+    mfa_guard: Mutex<MfaGuard>,
+}
+
+/// Failed second-factor attempts before [`MFA_LOCKOUT_SECS`] applies.
+pub const MFA_MAX_FAILURES: u32 = 5;
+
+/// How long TOTP verification stays locked after too many failures.
+pub const MFA_LOCKOUT_SECS: i64 = 300;
+
+/// Per-user second-factor state (ADR 0022).
+#[derive(Debug, Default)]
+struct MfaGuard {
+    /// username → (consecutive failures, locked until)
+    failures: std::collections::HashMap<String, (u32, i64)>,
+    /// username → last accepted TOTP time step
+    last_totp_step: std::collections::HashMap<String, i64>,
 }
 
 impl AuthorizationServer {
@@ -364,6 +381,7 @@ impl AuthorizationServer {
             dpop_nonce: Mutex::new(String::new()),
             users: Mutex::new(UserStore::new()),
             webauthn,
+            mfa_guard: Mutex::new(MfaGuard::default()),
         }
     }
 
@@ -753,7 +771,21 @@ impl AuthorizationServer {
     }
 
     /// Verify a TOTP code for `username` at `now`.
+    /// Verifies a TOTP code for `username` (ADR 0010, ADR 0022).
+    ///
+    /// After [`MFA_MAX_FAILURES`] consecutive failures the user's TOTP check
+    /// is locked for [`MFA_LOCKOUT_SECS`] (`too_many_attempts`), so the six
+    /// digits cannot be brute-forced online. A code for a time step that was
+    /// already accepted is refused (RFC 6238 §5.2), so an observed code
+    /// cannot be replayed within the skew window.
     pub fn verify_totp(&self, username: &str, code: &str, now: i64) -> Result<(), AuthnError> {
+        let username = username.trim();
+        let mut guard = self.mfa_guard.lock().expect("mfa guard lock");
+        if let Some(&(failures, locked_until)) = guard.failures.get(username) {
+            if failures >= MFA_MAX_FAILURES && now < locked_until {
+                return Err(AuthnError::TooManyAttempts);
+            }
+        }
         let secret_b32 = self
             .users
             .lock()
@@ -761,10 +793,30 @@ impl AuthorizationServer {
             .totp_secret(username)
             .ok_or(AuthnError::InvalidMfa)?;
         let secret = totp::decode_base32(&secret_b32)?;
-        if totp::verify_code(&secret, code, now) {
-            Ok(())
-        } else {
-            Err(AuthnError::InvalidMfa)
+        let accepted = totp::matching_step(&secret, code, now).filter(|step| {
+            guard
+                .last_totp_step
+                .get(username)
+                .is_none_or(|last| step > last)
+        });
+        match accepted {
+            Some(step) => {
+                guard.failures.remove(username);
+                guard.last_totp_step.insert(username.to_owned(), step);
+                Ok(())
+            }
+            None => {
+                let entry = guard.failures.entry(username.to_owned()).or_insert((0, 0));
+                // A lockout that has expired starts a fresh count.
+                if entry.0 >= MFA_MAX_FAILURES {
+                    *entry = (0, 0);
+                }
+                entry.0 += 1;
+                if entry.0 >= MFA_MAX_FAILURES {
+                    entry.1 = now.saturating_add(MFA_LOCKOUT_SECS);
+                }
+                Err(AuthnError::InvalidMfa)
+            }
         }
     }
 
@@ -2740,5 +2792,63 @@ mod tests {
             .introspect_token(&tok.refresh_token.unwrap(), TokenTypeHint::RefreshToken, 1_001)
             .unwrap();
         assert_eq!(rt.cnf_jkt.as_deref(), Some(jkt.as_str()));
+    }
+
+    fn totp_server() -> (AuthorizationServer, Vec<u8>) {
+        let srv = server();
+        srv.seed_demo_users();
+        let secret = totp::generate_secret().unwrap();
+        srv.set_totp_secret("alice", &totp::encode_base32(&secret))
+            .unwrap();
+        (srv, secret.to_vec())
+    }
+
+    #[test]
+    fn totp_code_cannot_be_replayed() {
+        let (srv, secret) = totp_server();
+        let code = totp::generate_code(&secret, 1_000);
+        assert_eq!(srv.verify_totp("alice", &code, 1_000), Ok(()));
+        // Same code again, still inside the skew window.
+        assert_eq!(srv.verify_totp("alice", &code, 1_010), Err(AuthnError::InvalidMfa));
+        // An older step than the accepted one is refused too.
+        let older = totp::generate_code(&secret, 1_000 - totp::TOTP_STEP_SECS);
+        assert_eq!(srv.verify_totp("alice", &older, 1_010), Err(AuthnError::InvalidMfa));
+        // The next step's code works.
+        let next = totp::generate_code(&secret, 1_000 + totp::TOTP_STEP_SECS);
+        assert_eq!(srv.verify_totp("alice", &next, 1_000 + totp::TOTP_STEP_SECS), Ok(()));
+    }
+
+    #[test]
+    fn totp_locks_after_repeated_failures() {
+        let (srv, secret) = totp_server();
+        let now = 5_000;
+        let good = totp::generate_code(&secret, now);
+        let wrong = if good == "000000" { "111111" } else { "000000" };
+        for _ in 0..MFA_MAX_FAILURES {
+            assert_eq!(srv.verify_totp("alice", wrong, now), Err(AuthnError::InvalidMfa));
+        }
+        // Locked: even the correct code is refused.
+        assert_eq!(srv.verify_totp("alice", &good, now + 1), Err(AuthnError::TooManyAttempts));
+        // After the lockout a correct code works and resets the count.
+        let later = now + MFA_LOCKOUT_SECS;
+        let code = totp::generate_code(&secret, later);
+        assert_eq!(srv.verify_totp("alice", &code, later), Ok(()));
+    }
+
+    #[test]
+    fn totp_success_resets_failure_count() {
+        let (srv, secret) = totp_server();
+        let wrong = |now: i64| {
+            if totp::generate_code(&secret, now) == "000000" { "111111" } else { "000000" }
+        };
+        for _ in 0..MFA_MAX_FAILURES - 1 {
+            assert!(srv.verify_totp("alice", wrong(2_000), 2_000).is_err());
+        }
+        let code = totp::generate_code(&secret, 2_000);
+        assert_eq!(srv.verify_totp("alice", &code, 2_000), Ok(()));
+        // The count restarted: four more failures do not lock.
+        for _ in 0..MFA_MAX_FAILURES - 1 {
+            assert_eq!(srv.verify_totp("alice", wrong(2_100), 2_100), Err(AuthnError::InvalidMfa));
+        }
     }
 }

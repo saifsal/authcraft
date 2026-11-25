@@ -881,6 +881,21 @@ fn run_authn_vector(path: &Path) {
                 .get("verify_at")
                 .and_then(Value::as_i64)
                 .unwrap_or(now);
+            // ADR 0022: failed attempts before the measured one.
+            let prior_failures = steps.get("prior_failures").and_then(Value::as_i64).unwrap_or(0);
+            let wrong = if code == "000000" { "111111" } else { "000000" };
+            for _ in 0..prior_failures {
+                assert_eq!(
+                    srv.verify_totp(username, wrong, verify_at),
+                    Err(oauth::AuthnError::InvalidMfa),
+                    "{case}: prior failure"
+                );
+            }
+            // ADR 0022: accept the code once, then measure a second use.
+            if bool_field(steps, "replay") {
+                srv.verify_totp(username, &code, verify_at)
+                    .unwrap_or_else(|e| panic!("{case}: first use: {e}"));
+            }
             let result = srv.verify_totp(username, &code, verify_at);
             if bool_field(expect, "ok") {
                 result.unwrap_or_else(|e| panic!("{case}: {e}"));

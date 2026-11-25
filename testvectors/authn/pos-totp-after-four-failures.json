@@ -1,0 +1,19 @@
+{
+  "id": "pos-totp-after-four-failures",
+  "source": "generated",
+  "description": "Four failed codes do not lock; the correct code still succeeds.",
+  "steps": {
+    "action": "totp",
+    "username": "alice",
+    "password": "password",
+    "seed_password": "password",
+    "subject": "alice",
+    "totp_secret": "JBSWY3DPEHPK3PXP",
+    "now": 1111111111,
+    "prior_failures": 4
+  },
+  "expect": {
+    "ok": true,
+    "subject": "alice"
+  }
+}

@@ -27,6 +27,8 @@ pub enum AuthnError {
     InvalidCredentials,
     MfaRequired,
     InvalidMfa,
+    /// Too many failed second-factor attempts; retry later (ADR 0022).
+    TooManyAttempts,
 }
 
 impl AuthnError {
@@ -35,6 +37,7 @@ impl AuthnError {
             AuthnError::InvalidCredentials => "invalid_credentials",
             AuthnError::MfaRequired => "mfa_required",
             AuthnError::InvalidMfa => "invalid_mfa",
+            AuthnError::TooManyAttempts => "too_many_attempts",
         }
     }
 }

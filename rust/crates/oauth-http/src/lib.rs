@@ -1129,12 +1129,21 @@ async fn mfa_post(
         )
             .into_response();
     }
-    if state
+    match state
         .server
         .verify_totp(&mfa.username, &form.code, now_unix())
-        .is_err()
     {
-        return (StatusCode::UNAUTHORIZED, mfa_page(Some("Invalid code"))).into_response();
+        Ok(()) => {}
+        Err(oauth::AuthnError::TooManyAttempts) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                mfa_page(Some("Too many attempts; try again later")),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (StatusCode::UNAUTHORIZED, mfa_page(Some("Invalid code"))).into_response();
+        }
     }
 
     state.mfa_pending.lock().expect("mfa lock").remove(&ticket);

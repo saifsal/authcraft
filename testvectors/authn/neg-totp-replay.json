@@ -1,0 +1,19 @@
+{
+  "id": "neg-totp-replay",
+  "source": "generated",
+  "description": "A TOTP code already accepted for its time step is refused on reuse (RFC 6238 \u00a75.2).",
+  "steps": {
+    "action": "totp",
+    "username": "alice",
+    "password": "password",
+    "seed_password": "password",
+    "subject": "alice",
+    "totp_secret": "JBSWY3DPEHPK3PXP",
+    "now": 1111111111,
+    "replay": true
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_mfa"
+  }
+}

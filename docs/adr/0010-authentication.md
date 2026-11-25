@@ -29,6 +29,7 @@ passwords, then optional second factors.
 ### B2 — TOTP
 
 1. RFC 6238 TOTP: HMAC-SHA1, 6 digits, 30-second step, ±1 step skew.
+   Attempt lockout and replay protection: [ADR 0022](0022-second-factor-throttling.md).
    Implemented in `oauth::totp` with `ring` (no external TOTP crate).
 2. `enroll_totp(username, issuer)` stores a base32 secret and returns
    `secret_b32` + `otpauth_uri` once.

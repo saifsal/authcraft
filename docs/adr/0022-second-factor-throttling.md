@@ -38,5 +38,5 @@ two weaknesses in `AuthorizationServer::verify_totp`:
   five minutes. This is accepted: it needs the password, and the
   alternative is an online bypass of the second factor.
 - State is in memory, like the rest of the AS.
-- Passwords are not throttled; that remains a documented risk in
-  `docs/threat-model.md`.
+- Passwords are not throttled; that remains residual risk R3 in
+  [`docs/threat-model.md`](../threat-model.md).

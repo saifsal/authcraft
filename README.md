@@ -281,6 +281,7 @@ Useful design notes while changing verification:
 - [`docs/oauth-m6.md`](docs/oauth-m6.md) — M6 control plane runbook.
 - [`docs/oauth-m7.md`](docs/oauth-m7.md) — M7 federation runbook.
 - [`docs/rfc-9700-checklist.md`](docs/rfc-9700-checklist.md) — RFC 9700 BCP vs authcraft status.
+- [`docs/threat-model.md`](docs/threat-model.md) — assets, adversaries, mitigations, and residual risks.
 - [`docs/oauth-m1.md`](docs/oauth-m1.md) — how to run the M1 library and HTTP demo.
 - [`docs/oauth-m2.md`](docs/oauth-m2.md) — how to exercise OIDC discovery, ID tokens, and UserInfo.
 

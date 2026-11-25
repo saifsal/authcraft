@@ -41,6 +41,7 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   └── 0022-second-factor-throttling.md # TOTP lockout + replay protection
 │   ├── rfc-conformance.md                 # scope map per milestone
 │   ├── rfc-9700-checklist.md              # OAuth security BCP status
+│   ├── threat-model.md                    # assets, adversaries, mitigations, residual risks
 │   ├── openid-conformance-checklist.md    # OIDF-style OP expectations
 │   └── oauth-m1.md … oauth-m8.md          # per-milestone runbooks
 ├── rust/
@@ -144,7 +145,7 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 └── AGENTS.md
 ```
 
-These paths are described in older notes and are not in the tree: `docs/threat-model.md`. When another language is added, give it its own `mise.toml` in that directory.
+When another language is added, give it its own `mise.toml` in that directory.
 
 ## Setup
 
@@ -258,7 +259,7 @@ Local tooling:
 - The tree is the source of truth for what runs. M1 OAuth is Rust-only so far (`oauth` + `oauth-http`); there is no Zig/Go OAuth harness yet. Rust, Zig, and Go JOSE verifiers agree on the shared JOSE vectors; the Go harness differentially checks Go against `jose-cli`. `go/harness/oauth_jwt_test.go` re-verifies the JWTs in `testvectors/client_auth/`, `jar/`, and `introspect/` at the JWT layer only; its `jwtVerdicts` table must classify every vector file in those directories.
 - `testvectors/generated/` holds the ADR 0003 minimum negative vector set and positive time-boundary cases. `testvectors/rfc/` holds compact examples copied from RFC 7515 and RFC 8037. They are run against Rust (`tests/vectors.rs`), Zig (`zig/src/vectors.zig`), and Go (`go/harness`). The examples whose headers have no `kid` expect `key_not_found`; their signature bytes are checked by `rfc_signatures_match_when_kid_is_absent` in each language. `testvectors/oauth/` is the M1 contract and `testvectors/oidc/` is the M2 contract for the Rust `oauth` crate (ADR 0005 / ADR 0006). Unit tests are not a substitute for those suites; `docs/rfc-conformance.md` says so.
 - `cargo test` does start the `oauth-http` e2e harness in-process; `cargo run -p oauth-http` is the interactive demo. Set `AUTHCRAFT_TLS_CERT` and `AUTHCRAFT_TLS_KEY` to PEM files to serve HTTPS (optional mTLS) instead, and `AUTHCRAFT_TLS_CLIENT_CA` to trust a CA for `tls_client_auth`; `tests/mtls.rs` starts a real TLS listener on an ephemeral loopback port. There is still no production deployment.
-- `docs/threat-model.md` is not in the repository.
+- `docs/threat-model.md` is the threat model. Update it when a change adds an endpoint, credential, token type, or trust boundary, or closes one of its residual risks.
 - Rust older than 1.88 does not compile `b64url.rs`. A default toolchain of 1.83 fails even though `Cargo.lock` resolves.
 - `Jwks::parse` fails the whole document on bad JSON, a missing `keys` array, a non-object entry, a non-string `kid`, or a duplicate `kid`. An entry that is present but unusable (unknown `kty` or `crv`, bad base64url, wrong length, non-string `alg` or `use`, `oct` key under 32 bytes) stays in the set and can never be selected (`key_not_found`). Private members such as `d` are ignored.
 - `kid` is required. There is no try-every-key fallback. A key `alg` member must equal the header `alg`. If `alg` is absent, the key type decides: `OKP`/`Ed25519` is `EdDSA`, `EC`/`P-256` is `ES256`, `oct` is `HS256`. A `use` member must be `sig`.

@@ -7,6 +7,7 @@ pub mod config;
 pub mod mailer;
 pub mod pages;
 pub mod ratelimit;
+pub mod session;
 pub mod store;
 pub mod tls;
 
@@ -48,8 +49,12 @@ struct OidcPending {
 #[derive(Clone)]
 pub struct AppState {
     pub server: Arc<AuthorizationServer>,
-    pending: Arc<Mutex<HashMap<String, PendingAuthorization>>>,
-    mfa_pending: Arc<Mutex<HashMap<String, MfaPending>>>,
+    /// Sign-ins in progress (ADR 0026).
+    logins: session::Tickets<session::LoginTicket>,
+    /// Password accepted, second factor pending (ADR 0026).
+    mfa: session::Tickets<MfaPending>,
+    /// Single sign-on sessions (ADR 0026).
+    pub sessions: session::Sessions,
     pub oidc_rp: Option<OidcRpConfig>,
     oidc_pending: Arc<Mutex<HashMap<String, OidcPending>>>,
     /// Optional LDAP-style directory (in-memory for demos/tests).
@@ -74,8 +79,9 @@ impl AppState {
             accounts: accounts::Accounts::new(server.clone(), db, &issuer),
             demo: false,
             server,
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            mfa_pending: Arc::new(Mutex::new(HashMap::new())),
+            logins: Default::default(),
+            mfa: Default::default(),
+            sessions: Default::default(),
             oidc_rp: None,
             oidc_pending: Arc::new(Mutex::new(HashMap::new())),
             directory: None,
@@ -224,6 +230,8 @@ pub fn app(state: AppState) -> Router {
                 .put(scim_replace_user)
                 .delete(scim_delete_user),
         )
+        .route("/account", get(account_get))
+        .route("/logout", get(logout_get).post(logout_post))
         .merge(accounts::routes())
         .with_state(state)
         .layer(axum::middleware::from_fn(security_headers))
@@ -591,12 +599,6 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-fn random_ticket() -> String {
-    use ring::rand::{SecureRandom, SystemRandom};
-    let mut bytes = [0u8; 16];
-    SystemRandom::new().fill(&mut bytes).expect("rng");
-    jose::b64url::encode(&bytes)
-}
 
 #[derive(Debug, Deserialize)]
 pub struct AuthorizeQuery {
@@ -611,13 +613,19 @@ pub struct AuthorizeQuery {
     pub request_uri: Option<String>,
     /// RFC 9101 request object (ADR 0015).
     pub request: Option<String>,
+    /// OIDC Core §3.1.2.1 `prompt` (`none`, `login`; others ignored).
+    pub prompt: Option<String>,
 }
 
 async fn authorize(
     State(state): State<AppState>,
     https: Option<Extension<Https>>,
+    headers_in: HeaderMap,
     Query(q): Query<AuthorizeQuery>,
 ) -> Response {
+    let prompt = q.prompt.clone().unwrap_or_default();
+    let prompt_none = prompt.split(' ').any(|p| p == "none");
+    let prompt_login = prompt.split(' ').any(|p| p == "login");
     let req = AuthorizeRequest {
         response_type: q.response_type.unwrap_or_default(),
         client_id: q.client_id.unwrap_or_default(),
@@ -633,20 +641,38 @@ async fn authorize(
 
     match state.server.begin_authorize(&req, now_unix()) {
         Ok(pending) => {
-            let ticket = random_ticket();
-            state
-                .pending
-                .lock()
-                .expect("pending lock")
-                .insert(ticket.clone(), pending);
+            // ADR 0026: an existing SSO session completes the request at once,
+            // unless the client asked for a fresh sign-in.
+            if !prompt_login {
+                if let Some(login) = sso_login(&state, &headers_in) {
+                    return match state.server.finish_authorize(pending, &login, now_unix()) {
+                        Ok(success) => redirect_with_code(&success),
+                        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
+                    };
+                }
+            }
+            if prompt_none {
+                // OIDC Core §3.1.2.6: no interaction allowed and no session.
+                return redirect_with_error(&state, &pending, "login_required");
+            }
+            let ticket = state.logins.issue(
+                session::LoginTicket {
+                    pending: Some(pending),
+                    return_to: None,
+                    created_at: now_unix(),
+                },
+                now_unix(),
+            );
             let mut headers = HeaderMap::new();
             headers.insert(
                 header::SET_COOKIE,
-                HeaderValue::from_str(&format!(
-                    "authcraft_login={ticket}; Path=/; HttpOnly; SameSite=Lax{}",
+                HeaderValue::from_str(&session::set_cookie(
+                    session::TICKET_COOKIE,
+                    &ticket,
+                    session::TICKET_SECS,
                     // RFC 6265 §4.1.2.5: never send the ticket over plain HTTP
                     // once the AS is served over HTTPS (ADR 0021).
-                    if https.is_some() || state.secure_cookies { "; Secure" } else { "" }
+                    secure(&state, &https),
                 ))
                 .expect("cookie header"),
             );
@@ -782,6 +808,82 @@ async fn par(
     }
 }
 
+/// Whether cookies should carry `Secure` (HTTPS listener or proxy flag).
+fn secure(state: &AppState, https: &Option<Extension<Https>>) -> bool {
+    https.is_some() || state.secure_cookies
+}
+
+/// The identity of the browser's live SSO session, re-reading a local
+/// account's profile and dropping the session if the account is gone or
+/// unverified (ADR 0026).
+fn sso_login(state: &AppState, headers: &HeaderMap) -> Option<LoginSubject> {
+    let raw = session::cookie_value(headers, session::SESSION_COOKIE)?;
+    let sess = state.sessions.get(&raw, now_unix())?;
+    match &sess.username {
+        Some(username) => match state.server.account(username) {
+            Some(account) if account.email_verified => Some(account.login_subject()),
+            _ => {
+                state.sessions.remove(&raw);
+                None
+            }
+        },
+        None => Some(sess.login),
+    }
+}
+
+/// Redirects an authorization error to the validated redirect URI with
+/// `state` and RFC 9207 `iss` (OIDC Core §3.1.2.6).
+fn redirect_with_error(state: &AppState, pending: &PendingAuthorization, error: &str) -> Response {
+    let mut url = url::Url::parse(&pending.redirect_uri).expect("validated redirect_uri");
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("error", error);
+        if let Some(s) = &pending.state {
+            q.append_pair("state", s);
+        }
+        q.append_pair("iss", &state.server.config.issuer);
+    }
+    Redirect::to(url.as_str()).into_response()
+}
+
+/// Finishes a sign-in (ADR 0026): consumes the login ticket, starts the SSO
+/// session, then issues the authorization code, or returns to the account
+/// page for a standalone sign-in.
+fn complete_login(
+    state: &AppState,
+    ticket: &str,
+    login: LoginSubject,
+    username: Option<String>,
+    secure: bool,
+) -> Response {
+    let Some(entry) = state.logins.take(ticket, now_unix()) else {
+        return pages::message(
+            StatusCode::BAD_REQUEST,
+            "Sign-in expired",
+            "This sign-in took too long. Start again from the app you came from.",
+        );
+    };
+    let raw = state.sessions.create(login.clone(), username, now_unix());
+    let cookie = session::set_cookie(session::SESSION_COOKIE, &raw, session::SESSION_SECS, secure);
+    let mut response = match entry.pending {
+        Some(pending) => match state.server.finish_authorize(pending, &login, now_unix()) {
+            Ok(success) => redirect_with_code(&success),
+            Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
+        },
+        None => Redirect::to(entry.return_to.as_deref().unwrap_or("/account")).into_response(),
+    };
+    if let Ok(v) = HeaderValue::from_str(&cookie) {
+        response.headers_mut().append(header::SET_COOKIE, v);
+    }
+    response
+}
+
+/// The live login ticket from the request, if any.
+fn live_ticket(state: &AppState, headers: &HeaderMap) -> Option<String> {
+    let ticket = session::cookie_value(headers, session::TICKET_COOKIE)?;
+    state.logins.get(&ticket, now_unix()).map(|_| ticket)
+}
+
 /// The sign-in page (ADR 0025). Demo credentials are shown only in demo mode.
 fn login_page(state: &AppState, error: Option<&str>, username: &str) -> Html<String> {
     let demo = if state.demo {
@@ -826,8 +928,41 @@ fn login_page(state: &AppState, error: Option<&str>, username: &str) -> Html<Str
     pages::layout("Sign in", &body)
 }
 
-async fn login_get(State(state): State<AppState>) -> Html<String> {
-    login_page(&state, None, "")
+#[derive(Debug, Deserialize)]
+pub struct LoginQuery {
+    /// Local path to return to after a standalone sign-in.
+    pub return_to: Option<String>,
+}
+
+/// Shows the sign-in form. Without a live ticket (someone opened `/login`
+/// directly), issues one for a standalone sign-in (ADR 0026).
+async fn login_get(
+    State(state): State<AppState>,
+    https: Option<Extension<Https>>,
+    headers: HeaderMap,
+    Query(q): Query<LoginQuery>,
+) -> Response {
+    if live_ticket(&state, &headers).is_some() {
+        return login_page(&state, None, "").into_response();
+    }
+    // Only local paths, so this cannot become an open redirect.
+    let return_to = q
+        .return_to
+        .filter(|p| p.starts_with('/') && !p.starts_with("//") && !p.contains('\\'));
+    let ticket = state.logins.issue(
+        session::LoginTicket {
+            pending: None,
+            return_to,
+            created_at: now_unix(),
+        },
+        now_unix(),
+    );
+    let cookie = session::set_cookie(session::TICKET_COOKIE, &ticket, session::TICKET_SECS, secure(&state, &https));
+    let mut response = login_page(&state, None, "").into_response();
+    if let Ok(v) = HeaderValue::from_str(&cookie) {
+        response.headers_mut().append(header::SET_COOKIE, v);
+    }
+    response
 }
 
 #[derive(Debug, Deserialize)]
@@ -865,17 +1000,9 @@ async fn oidc_start(State(state): State<AppState>, headers: HeaderMap) -> Respon
     let Some(cfg) = state.oidc_rp.as_ref() else {
         return (StatusCode::NOT_FOUND, "OIDC RP not configured").into_response();
     };
-    let Some(ticket) = cookie_ticket(&headers) else {
-        return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
+    let Some(ticket) = live_ticket(&state, &headers) else {
+        return expired_login();
     };
-    if !state
-        .pending
-        .lock()
-        .expect("pending lock")
-        .contains_key(&ticket)
-    {
-        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
-    }
 
     let discovery_url = format!(
         "{}/.well-known/openid-configuration",
@@ -919,6 +1046,7 @@ pub struct OidcCallbackQuery {
 
 async fn oidc_callback(
     State(state): State<AppState>,
+    https: Option<Extension<Https>>,
     Query(q): Query<OidcCallbackQuery>,
 ) -> Response {
     let Some(cfg) = state.oidc_rp.clone() else {
@@ -1019,18 +1147,7 @@ async fn oidc_callback(
         }
     };
 
-    let pending = {
-        let mut map = state.pending.lock().expect("pending lock");
-        map.remove(&pending_oidc.ticket)
-    };
-    let Some(pending) = pending else {
-        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
-    };
-
-    match state.server.finish_authorize(pending, &login, now_unix()) {
-        Ok(success) => redirect_with_code(&success),
-        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
-    }
+    complete_login(&state, &pending_oidc.ticket, login, None, secure(&state, &https))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1041,21 +1158,15 @@ pub struct LdapLoginForm {
 
 async fn ldap_login(
     State(state): State<AppState>,
+    https: Option<Extension<Https>>,
     headers: HeaderMap,
     Form(form): Form<LdapLoginForm>,
 ) -> Response {
     let Some(directory) = state.directory.as_ref() else {
         return (StatusCode::NOT_FOUND, "directory not configured").into_response();
     };
-    let Some(ticket) = cookie_ticket(&headers) else {
-        return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
-    };
-    let pending = {
-        let map = state.pending.lock().expect("pending lock");
-        map.get(&ticket).cloned()
-    };
-    let Some(pending) = pending else {
-        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
+    let Some(ticket) = live_ticket(&state, &headers) else {
+        return expired_login();
     };
 
     let login = match directory.authenticate(form.username.trim(), &form.password) {
@@ -1069,32 +1180,18 @@ async fn ldap_login(
         }
     };
 
-    {
-        let mut map = state.pending.lock().expect("pending lock");
-        map.remove(&ticket);
-    }
-
-    match state.server.finish_authorize(pending, &login, now_unix()) {
-        Ok(success) => redirect_with_code(&success),
-        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
-    }
+    complete_login(&state, &ticket, login, None, secure(&state, &https))
 }
 
 async fn login_post(
     State(state): State<AppState>,
+    https: Option<Extension<Https>>,
     headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let Some(ticket) = cookie_ticket(&headers) else {
-        return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
+    let Some(ticket) = live_ticket(&state, &headers) else {
+        return expired_login();
     };
-    let has_pending = {
-        let map = state.pending.lock().expect("pending lock");
-        map.contains_key(&ticket)
-    };
-    if !has_pending {
-        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
-    }
 
     // ADR 0025: login names are lowercased emails (the demo user is `alice`).
     let username = form.username.trim().to_ascii_lowercase();
@@ -1139,47 +1236,140 @@ async fn login_post(
     };
 
     if state.server.user_mfa_enrolled(&username) {
-        state.mfa_pending.lock().expect("mfa lock").insert(
-            ticket,
-            MfaPending {
-                username,
-                login,
-            },
-        );
+        state.mfa.put(ticket, MfaPending { username, login }, now_unix());
         return Redirect::to("/login/mfa").into_response();
     }
+    complete_login(&state, &ticket, login, Some(username), secure(&state, &https))
+}
 
-    let pending = {
-        let mut map = state.pending.lock().expect("pending lock");
-        map.remove(&ticket)
+/// The signed-in account (ADR 0026). Without a session, sends the browser to
+/// a standalone sign-in that returns here.
+async fn account_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(raw) = session::cookie_value(&headers, session::SESSION_COOKIE) else {
+        return Redirect::to("/login?return_to=/account").into_response();
     };
-    let Some(pending) = pending else {
-        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
+    let Some(sess) = state.sessions.get(&raw, now_unix()) else {
+        return Redirect::to("/login?return_to=/account").into_response();
     };
+    let Some(login) = sso_login(&state, &headers) else {
+        return Redirect::to("/login?return_to=/account").into_response();
+    };
+    let (totp, webauthn) = match &sess.username {
+        Some(u) => (state.server.user_totp_enrolled(u), state.server.user_webauthn_enrolled(u)),
+        None => (false, false),
+    };
+    let yes_no = |b: bool| if b { "on" } else { "off" };
+    let local = sess.username.is_some();
+    let body = format!(
+        r#"<h1>{name}</h1>
+<p class="lead">{email}</p>
+<h2>Identity</h2>
+<ul class="facts">
+  <li>Subject (<code>sub</code>) apps see: <code>{sub}</code></li>
+  <li>Account type: {kind}</li>
+</ul>
+<h2>Security</h2>
+<ul class="facts">
+  <li>Authenticator app (TOTP): {totp}</li>
+  <li>Security key (WebAuthn): {webauthn}</li>
+  {password}
+</ul>
+<form method="post" action="/logout">
+  <input type="hidden" name="csrf" value="{csrf}">
+  <button type="submit">Sign out</button>
+</form>"#,
+        name = pages::esc(login.name.as_deref().unwrap_or("Your account")),
+        email = pages::esc(login.email.as_deref().unwrap_or("")),
+        sub = pages::esc(&login.subject),
+        kind = if local { "authcraft account" } else { "federated sign-in" },
+        totp = yes_no(totp),
+        webauthn = yes_no(webauthn),
+        password = if local {
+            r#"<li><a href="/forgot">Change password</a> (sends a reset link)</li>"#
+        } else {
+            ""
+        },
+        csrf = pages::esc(&sess.csrf),
+    );
+    pages::layout_wide("Your account", &body).into_response()
+}
 
-    match state.server.finish_authorize(pending, &login, now_unix()) {
-        Ok(success) => redirect_with_code(&success),
-        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
+#[derive(Debug, Deserialize)]
+pub struct LogoutForm {
+    pub csrf: String,
+}
+
+async fn logout_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let sess = session::cookie_value(&headers, session::SESSION_COOKIE)
+        .and_then(|raw| state.sessions.get(&raw, now_unix()));
+    let Some(sess) = sess else {
+        return pages::message(StatusCode::OK, "Signed out", "You are not signed in to authcraft.");
+    };
+    let body = format!(
+        r#"<h1>Sign out of authcraft?</h1>
+<p class="lead">Apps you signed in to stay signed in until their own sessions end.</p>
+<form method="post" action="/logout">
+  <input type="hidden" name="csrf" value="{}">
+  <button type="submit">Sign out</button>
+</form>"#,
+        pages::esc(&sess.csrf)
+    );
+    pages::layout("Sign out", &body).into_response()
+}
+
+/// Ends the SSO session. CSRF-checked so other sites cannot sign users out.
+async fn logout_post(
+    State(state): State<AppState>,
+    https: Option<Extension<Https>>,
+    headers: HeaderMap,
+    Form(form): Form<LogoutForm>,
+) -> Response {
+    let raw = session::cookie_value(&headers, session::SESSION_COOKIE);
+    if let Some(raw) = &raw {
+        match state.sessions.get(raw, now_unix()) {
+            Some(sess) if csrf_eq(&sess.csrf, &form.csrf) => state.sessions.remove(raw),
+            Some(_) => {
+                return pages::message(StatusCode::FORBIDDEN, "Not signed out", "The form expired. Try again.");
+            }
+            None => {}
+        }
     }
+    let mut response = pages::message(StatusCode::OK, "Signed out", "You are signed out of authcraft.");
+    let clear = session::set_cookie(session::SESSION_COOKIE, "", 0, secure(&state, &https));
+    if let Ok(v) = HeaderValue::from_str(&clear) {
+        response.headers_mut().append(header::SET_COOKIE, v);
+    }
+    response
+}
+
+/// Constant-time string comparison for CSRF tokens.
+fn csrf_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// The page for a missing or expired login ticket.
+fn expired_login() -> Response {
+    pages::message(
+        StatusCode::BAD_REQUEST,
+        "Sign-in expired",
+        "This sign-in took too long or was already used. Start again from the app you came from, or open the sign-in page again.",
+    )
 }
 
 fn mfa_page(error: Option<&str>) -> Html<String> {
-    let err = error
-        .map(|e| format!("<p style=\"color:red\">{e}</p>"))
-        .unwrap_or_default();
-    Html(format!(
-        r#"<!doctype html>
-<html><head><title>authcraft MFA</title></head>
-<body>
-  <h1>Two-factor authentication</h1>
-  <p>Enter a TOTP code if enrolled, or complete WebAuthn via the JSON MFA endpoints (ADR 0010).</p>
-  {err}
-  <form method="post" action="/login/mfa">
-    <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" /></label>
-    <button type="submit">Verify TOTP</button>
-  </form>
-</body></html>"#
-    ))
+    let body = format!(
+        r#"<h1>Two-step verification</h1>
+<p class="lead">Enter the 6-digit code from your authenticator app.</p>
+{err}
+<form method="post" action="/login/mfa">
+  <label for="code">Code</label>
+  <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{{6}}" maxlength="6" required>
+  <button type="submit">Verify</button>
+</form>
+<p class="muted">Security keys use the WebAuthn endpoints (ADR 0010).</p>"#,
+        err = pages::error_line(error),
+    );
+    pages::layout("Two-step verification", &body)
 }
 
 async fn mfa_get() -> Html<String> {
@@ -1193,16 +1383,14 @@ pub struct MfaForm {
 
 async fn mfa_post(
     State(state): State<AppState>,
+    https: Option<Extension<Https>>,
     headers: HeaderMap,
     Form(form): Form<MfaForm>,
 ) -> Response {
     let Some(ticket) = cookie_ticket(&headers) else {
         return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
     };
-    let mfa = {
-        let map = state.mfa_pending.lock().expect("mfa lock");
-        map.get(&ticket).cloned()
-    };
+    let mfa = state.mfa.get(&ticket, now_unix());
     let Some(mfa) = mfa else {
         return (StatusCode::BAD_REQUEST, "no MFA session").into_response();
     };
@@ -1231,22 +1419,8 @@ async fn mfa_post(
         }
     }
 
-    state.mfa_pending.lock().expect("mfa lock").remove(&ticket);
-    let pending = {
-        let mut map = state.pending.lock().expect("pending lock");
-        map.remove(&ticket)
-    };
-    let Some(pending) = pending else {
-        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
-    };
-
-    match state
-        .server
-        .finish_authorize(pending, &mfa.login, now_unix())
-    {
-        Ok(success) => redirect_with_code(&success),
-        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
-    }
+    state.mfa.remove(&ticket);
+    complete_login(&state, &ticket, mfa.login, Some(mfa.username), secure(&state, &https))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1353,10 +1527,7 @@ async fn mfa_webauthn_start(State(state): State<AppState>, headers: HeaderMap) -
     let Some(ticket) = cookie_ticket(&headers) else {
         return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
     };
-    let username = {
-        let map = state.mfa_pending.lock().expect("mfa lock");
-        map.get(&ticket).map(|m| m.username.clone())
-    };
+    let username = state.mfa.get(&ticket, now_unix()).map(|m| m.username);
     let Some(username) = username else {
         return (StatusCode::BAD_REQUEST, "no MFA session").into_response();
     };
@@ -1375,16 +1546,14 @@ async fn mfa_webauthn_start(State(state): State<AppState>, headers: HeaderMap) -
 
 async fn mfa_webauthn_finish(
     State(state): State<AppState>,
+    https: Option<Extension<Https>>,
     headers: HeaderMap,
     Json(credential): Json<serde_json::Value>,
 ) -> Response {
     let Some(ticket) = cookie_ticket(&headers) else {
         return (StatusCode::BAD_REQUEST, "missing login ticket").into_response();
     };
-    let mfa = {
-        let map = state.mfa_pending.lock().expect("mfa lock");
-        map.get(&ticket).cloned()
-    };
+    let mfa = state.mfa.get(&ticket, now_unix());
     let Some(mfa) = mfa else {
         return (StatusCode::BAD_REQUEST, "no MFA session").into_response();
     };
@@ -1411,22 +1580,8 @@ async fn mfa_webauthn_finish(
             .into_response();
     }
 
-    state.mfa_pending.lock().expect("mfa lock").remove(&ticket);
-    let pending = {
-        let mut map = state.pending.lock().expect("pending lock");
-        map.remove(&ticket)
-    };
-    let Some(pending) = pending else {
-        return (StatusCode::BAD_REQUEST, "unknown or expired login").into_response();
-    };
-
-    match state
-        .server
-        .finish_authorize(pending, &mfa.login, now_unix())
-    {
-        Ok(success) => redirect_with_code(&success),
-        Err(err) => (StatusCode::BAD_REQUEST, err.code()).into_response(),
-    }
+    state.mfa.remove(&ticket);
+    complete_login(&state, &ticket, mfa.login, Some(mfa.username), secure(&state, &https))
 }
 
 #[derive(Debug, Deserialize)]

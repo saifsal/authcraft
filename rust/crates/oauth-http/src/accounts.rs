@@ -803,7 +803,9 @@ async fn reset_post(State(state): State<AppState>, Form(form): Form<ResetForm>) 
     let accounts = state.accounts.clone();
     let token = form.token.clone();
     match blocking(move || accounts.reset_password(&form.token, &form.password)).await {
-        Ok(_) => {
+        Ok(username) => {
+            // ADR 0026: a new password ends every existing SSO session.
+            state.sessions.revoke_user(&username);
             let body = r#"<h1>Password changed</h1>
 <p class="lead ok">Your new password is set.</p>
 <div class="links"><a href="/account">Your account</a></div>"#;

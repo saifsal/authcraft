@@ -96,7 +96,10 @@ residual risk), or **open** (worth fixing).
 | Implicit-flow token leakage | Only `response_type=code` | mitigated |
 | Mix-up across authorization servers | RFC 9207 `iss` on authorize redirects (ADR 0009 B3) | mitigated |
 | CSRF on the authorization response | PKCE binds the code to the client's verifier; `state` echoed | mitigated |
-| Login CSRF / ticket fixation | Ticket is a 128-bit random value set at `/authorize`; `HttpOnly`, `SameSite=Lax`, and `Secure` under HTTPS (ADR 0021 B2) | mitigated |
+| Login CSRF / ticket fixation | Ticket is a 128-bit random value set at `/authorize`; `HttpOnly`, `SameSite=Lax`, and `Secure` under HTTPS (ADR 0021 B2); expires after 10 min (ADR 0026) | mitigated |
+| SSO session theft or fixation | 256-bit random cookie, stored hashed, issued only after sign-in, `HttpOnly` / `SameSite=Lax` / `Secure`, 24 h; reset ends sessions (ADR 0026) | mitigated |
+| Forced logout (CSRF) | `POST /logout` requires the session's CSRF token (ADR 0026) | mitigated |
+| Open redirect after sign-in | `return_to` must be a local path (ADR 0026; `tests/sso.rs`) | mitigated |
 | Clickjacking of login or consent pages | `X-Frame-Options: DENY`, CSP `frame-ancestors 'none'` (ADR 0021) | mitigated |
 | Code or `state` leaking through `Referer` | `Referrer-Policy: no-referrer` (ADR 0021) | mitigated |
 | Tampering with authorize parameters in the browser | Optional PAR and JAR, mandatory per client (ADR 0009, 0015, 0018) | mitigated (opt-in) |
@@ -164,7 +167,7 @@ residual risk), or **open** (worth fixing).
 | Threat | Mitigation | Status |
 |---|---|---|
 | Login flood exhausting CPU (Argon2id per attempt) | None | accepted (see R3) |
-| Unbounded in-memory growth (open registration, pending login and MFA tickets with no expiry, caches) | Codes, PAR URIs, DPoP and assertion `jti` caches expire; login and MFA tickets and registered clients do not | open (see R2, R5) |
+| Unbounded in-memory growth | Codes, PAR URIs, DPoP and assertion `jti` caches, login and MFA tickets (ADR 0026), and sessions expire; production has no open registration (ADR 0023) | mitigated |
 
 ### Transport
 
@@ -195,8 +198,8 @@ Ordered by how much each one matters if the code were reused.
 - **R4. Demo secrets.** `DEMO_ADMIN_TOKEN` and the demo password for `alice`
   are published constants. Since ADR 0023 they exist only under `--demo`;
   production refuses the demo admin token and seeds no users.
-- **R5. Pending tickets never expire.** Login and MFA tickets in `AppState`
-  stay until used, so abandoned logins accumulate.
+- **R5. Pending tickets never expire.** Closed: tickets expire after 10
+  minutes and are swept (ADR 0026).
 - **R6. Sidecar transport.** `authcraft-edge` has no TLS. It is meant to sit
   next to a proxy on the same host.
 - **R7. Revocation visibility.** Offline verifiers accept a revoked access

@@ -1,0 +1,38 @@
+# Repository-level tasks. Toolchains are pinned per language directory
+# (rust/mise.toml, zig/mise.toml, go/mise.toml).
+
+[tasks.build-release]
+description = "Build the portable release binary of the authcraft server"
+dir = "rust"
+# Avoid AVX-512 hosts producing binaries that SIGILL on Broadwell VPSes.
+run = "RUSTFLAGS='-C target-cpu=x86-64-v2' cargo build --release -p oauth-http"
+
+[tasks.deploy]
+description = "Install the binary, unit, and conf.d site on the VPS (does not touch the Caddy root)"
+depends = ["build-release"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+HOST=${AUTHCRAFT_HOST:-root@95.179.177.168}
+ROOT=/opt/authcraft
+
+# The shared Caddy root is owned by the accumu.cc repo; this only writes
+# conf.d/authcraft.caddy. Secrets and clients are installed by hand once
+# (deploy/README.md) and never copied from this machine.
+ssh "$HOST" "mkdir -p '$ROOT' /etc/caddy/conf.d
+test -f /etc/caddy/Caddyfile || { echo 'missing /etc/caddy/Caddyfile — run mise run deploy-caddy-root in accumu.cc first' >&2; exit 1; }
+test -s /etc/authcraft/resend-api-key || { echo 'missing /etc/authcraft/resend-api-key — see deploy/README.md' >&2; exit 1; }
+test -s /etc/authcraft/clients.json || { echo 'missing /etc/authcraft/clients.json — see deploy/README.md' >&2; exit 1; }"
+
+rsync -az --chmod=F755 rust/target/release/oauth-http "$HOST:$ROOT/authcraft"
+rsync -az --chmod=F644 deploy/authcraft.service "$HOST:/etc/systemd/system/authcraft.service"
+rsync -az --chmod=F644 deploy/Caddyfile "$HOST:/etc/caddy/conf.d/authcraft.caddy"
+
+ssh "$HOST" "chown -R root:root '$ROOT' /etc/systemd/system/authcraft.service /etc/caddy/conf.d/authcraft.caddy
+systemctl daemon-reload
+systemctl enable --now authcraft
+systemctl restart authcraft
+caddy validate --config /etc/caddy/Caddyfile
+systemctl reload-or-restart caddy
+systemctl --no-pager --full status authcraft caddy"
+"""

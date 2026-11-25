@@ -1,0 +1,68 @@
+# Installed at /etc/systemd/system/authcraft.service, mode 644, owner root:root.
+#
+# Requires: the release binary at /opt/authcraft/authcraft (statically links
+# SQLite; dynamically links only glibc: libc, libm, libgcc_s). State (signing
+# key, accounts database) lives in StateDirectory (/var/lib/authcraft →
+# private/authcraft for DynamicUser); UMask=0077 keeps it owner-only.
+#
+# Clients: /etc/authcraft/clients.json (public client metadata only: IDs,
+# redirect URIs, public JWKS), mode 644, owner root.
+#
+# Email: the Resend API key must exist at /etc/authcraft/resend-api-key, mode
+# 400, owner root. systemd hands it over through LoadCredential; it never
+# appears in argv or the environment.
+#
+# Admin API (optional, off by default): put a long random token in
+# /etc/authcraft/admin-token (mode 400) and add
+#   LoadCredential=admin-token:/etc/authcraft/admin-token
+# below. Without it, /admin and /scim answer 401.
+
+[Unit]
+Description=authcraft OAuth 2.0 / OpenID Connect provider
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=true
+StateDirectory=authcraft
+WorkingDirectory=/var/lib/authcraft
+ReadWritePaths=/var/lib/authcraft
+LoadCredential=resend-api-key:/etc/authcraft/resend-api-key
+ExecStart=/opt/authcraft/authcraft \
+	--data-dir . \
+	--public-url https://authcraft.accumu.cc \
+	--clients /etc/authcraft/clients.json \
+	--listen 127.0.0.1:8083 \
+	--secure-cookies \
+	--mail-from "authcraft <noreply@accumu.cc>"
+Restart=on-failure
+RestartSec=2
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

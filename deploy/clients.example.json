@@ -1,0 +1,18 @@
+{
+  "clients": [
+    {
+      "client_id": "tacto",
+      "client_name": "Tacto",
+      "redirect_uris": ["https://tacto.accumu.cc/auth/authcraft/callback"],
+      "token_endpoint_auth_method": "private_key_jwt",
+      "jwks": { "keys": [ { "kty": "OKP", "crv": "Ed25519", "kid": "REPLACE", "x": "REPLACE_WITH_TACTO_PUBLIC_KEY" } ] }
+    },
+    {
+      "client_id": "glossa",
+      "client_name": "Glossa",
+      "redirect_uris": ["https://glossa.accumu.cc/auth/authcraft/callback"],
+      "token_endpoint_auth_method": "private_key_jwt",
+      "jwks": { "keys": [ { "kty": "OKP", "crv": "Ed25519", "kid": "REPLACE", "x": "REPLACE_WITH_GLOSSA_PUBLIC_KEY" } ] }
+    }
+  ]
+}

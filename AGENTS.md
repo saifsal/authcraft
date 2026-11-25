@@ -42,7 +42,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── 0023-production-mode.md        # --demo vs production, clients file, key file
 │   │   ├── 0024-persistent-accounts.md    # SQLite accounts, email_verified
 │   │   ├── 0025-self-service-accounts.md  # sign-up, verify, reset, throttling (from glossa)
-│   │   └── 0026-sso-sessions.md           # SSO session, prompt, /account, logout, tickets
+│   │   ├── 0026-sso-sessions.md           # SSO session, prompt, /account, logout, tickets
+│   │   └── 0027-public-deployment.md      # landing page, Caddy + systemd on the accumu.cc VPS
 │   ├── rfc-conformance.md                 # scope map per milestone
 │   ├── rfc-9700-checklist.md              # OAuth security BCP status
 │   ├── threat-model.md                    # assets, adversaries, mitigations, residual risks
@@ -106,7 +107,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
 │   │   ├── tests/mtls.rs                  # self-signed mTLS + bound tokens over real TLS
 │   │   ├── tests/accounts.rs              # sign-up → verify → code; reset; throttling
-│   │   └── tests/sso.rs                   # session reuse, prompt, logout, reset ends sessions
+│   │   ├── tests/sso.rs                   # session reuse, prompt, logout, reset ends sessions
+│   │   └── tests/landing.rs               # landing page lists configured apps
 │   └── fuzz/                              # cargo-fuzz targets (own Cargo.lock; not in workspace)
 │       └── fuzz_targets/                  # b64url_decode, json_parse, jose_verify, pkce_challenge
 ├── zig/
@@ -152,6 +154,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   ├── introspect/                        # introspection callers (ADR 0016)
 │   ├── mtls/                              # RFC 8705 client auth and binding (ADR 0017)
 │   └── enforcement/                       # mandatory PAR / sender-constraint (ADR 0018)
+├── deploy/                                # Caddyfile, authcraft.service, clients.example.json, runbook
+├── mise.toml                              # repo tasks: build-release, deploy (never run by agents)
 ├── LICENSE                                # GNU GPL version 3
 ├── README.md
 └── AGENTS.md

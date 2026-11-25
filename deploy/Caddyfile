@@ -1,0 +1,25 @@
+# Installed at /etc/caddy/conf.d/authcraft.caddy, mode 644, owner root:root.
+# The root /etc/caddy/Caddyfile only imports conf.d (bootstrapped from the
+# accumu.cc repo via `mise run deploy-caddy-root`). This deploy only drops this
+# snippet.
+#
+# Live site: https://authcraft.accumu.cc — DNS A/AAAA (or CNAME) for
+# authcraft.accumu.cc → the VPS. TLS is terminated here; authcraft listens on
+# 127.0.0.1:8083 with --secure-cookies. HSTS belongs with TLS, so it is here.
+# trusted_proxies is deliberately unset: Caddy replaces any client-supplied
+# X-Forwarded-For with the peer address, which authcraft's rate limits use.
+
+authcraft.accumu.cc {
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	request_body {
+		max_size 64KB
+	}
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8083
+}

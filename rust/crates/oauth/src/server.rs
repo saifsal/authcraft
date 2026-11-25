@@ -582,6 +582,12 @@ impl AuthorizationServer {
         self.clients.lock().expect("clients lock").insert(client)
     }
 
+    /// A snapshot of every registered client, for server-side views such as
+    /// the landing page. Contains only public metadata (no secrets exist).
+    pub fn clients_snapshot(&self) -> Vec<Client> {
+        self.clients.lock().expect("clients lock").list().to_vec()
+    }
+
     /// List registered clients (admin).
     pub fn list_clients(&self, admin_token: Option<&str>) -> Result<Vec<Client>, AdminError> {
         self.require_admin(admin_token)?;

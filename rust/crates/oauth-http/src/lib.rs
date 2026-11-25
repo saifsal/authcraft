@@ -230,6 +230,7 @@ pub fn app(state: AppState) -> Router {
                 .put(scim_replace_user)
                 .delete(scim_delete_user),
         )
+        .route("/", get(landing))
         .route("/account", get(account_get))
         .route("/logout", get(logout_get).post(logout_post))
         .merge(accounts::routes())
@@ -1240,6 +1241,61 @@ async fn login_post(
         return Redirect::to("/login/mfa").into_response();
     }
     complete_login(&state, &ticket, login, Some(username), secure(&state, &https))
+}
+
+/// The public landing page (ADR 0027): what authcraft is, the apps that use
+/// it (from the configured clients), and links for people and developers.
+async fn landing(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let signed_in = sso_login(&state, &headers).is_some();
+    let apps: String = state
+        .server
+        .clients_snapshot()
+        .iter()
+        .filter(|c| !c.resource_server)
+        .filter_map(|c| {
+            let name = c.client_name.as_deref()?;
+            let origin = url::Url::parse(c.redirect_uris.first()?).ok()?;
+            (origin.scheme() == "https").then(|| {
+                format!(
+                    r#"<li><a href="{origin}">{name}</a></li>"#,
+                    origin = pages::esc(&origin.origin().ascii_serialization()),
+                    name = pages::esc(name)
+                )
+            })
+        })
+        .collect();
+    let apps = if apps.is_empty() {
+        String::new()
+    } else {
+        format!("<h2>Sign in with authcraft on</h2><ul class=\"facts\">{apps}</ul>")
+    };
+    let actions = if signed_in {
+        r#"<div class="links"><a href="/account">Your account</a></div>"#
+    } else {
+        r#"<div class="links"><a href="/signup">Create an account</a><a href="/login?return_to=/account">Sign in</a></div>"#
+    };
+    let iss = pages::esc(&state.server.config.issuer);
+    let body = format!(
+        r#"<h1>authcraft</h1>
+<p class="lead">An OAuth 2.0 and OpenID Connect provider, built from the JOSE layer up.</p>
+{actions}
+{apps}
+<h2>What is inside</h2>
+<ul class="facts">
+  <li>A JWS/JWT verifier written three times, in Rust, Zig, and Go, held to one shared set of test vectors.</li>
+  <li>Authorization code with PKCE (S256 only) and OpenID Connect, refresh-token rotation with reuse detection, revocation, and introspection.</li>
+  <li>Hardening from the OAuth 2.0 Security BCP (RFC 9700): PAR, signed request objects, DPoP and mutual-TLS sender-constrained tokens, <code>private_key_jwt</code> client authentication, and issuer identification.</li>
+  <li>Accounts with Argon2id passwords, authenticator-app codes, and security keys.</li>
+</ul>
+<h2>For developers</h2>
+<ul class="facts">
+  <li>Issuer: <code>{iss}</code></li>
+  <li>Discovery: <a href="/.well-known/openid-configuration"><code>/.well-known/openid-configuration</code></a></li>
+  <li>Signing keys: <a href="/.well-known/jwks.json"><code>/.well-known/jwks.json</code></a></li>
+</ul>
+<p class="muted">authcraft is an independent implementation. It has not had an external security audit.</p>"#
+    );
+    pages::layout_wide("OAuth 2.0 and OpenID Connect", &body).into_response()
 }
 
 /// The signed-in account (ADR 0026). Without a session, sends the browser to

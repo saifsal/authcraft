@@ -24,8 +24,9 @@ Assumptions:
   (a 0600 file) persist in the data directory (ADR 0023, 0024); codes,
   refresh families, caches, and the revocation denylist are in memory and a
   restart forgets them. `--demo` keeps everything in memory.
-- **A2.** The demo binds to `127.0.0.1`. Nothing here is deployed on a
-  network.
+- **A2.** The server binds to `127.0.0.1`. In production (M9) it sits
+  behind Caddy on the accumu.cc VPS, which terminates TLS and replaces
+  `X-Forwarded-For` (ADR 0027).
 - **A3.** The host and the process are trusted. An attacker with code
   execution or memory access on the host is out of scope.
 - **A4.** `ring`, `rustls`, `rustls-webpki`, `x509-parser`, `argon2`, and

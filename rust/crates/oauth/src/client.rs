@@ -33,6 +33,34 @@ impl TokenEndpointAuth {
     }
 }
 
+/// Whether `uri` may be registered as a redirect URI (ADR 0020).
+///
+/// - absolute URI without a fragment (RFC 6749 §3.1.2);
+/// - `https`, or `http` only for a loopback host (`localhost`, `127.0.0.1`,
+///   `[::1]`; RFC 8252 §7.3 / RFC 9700 §2.1);
+/// - any other scheme must be a private-use scheme containing a `.`
+///   (reverse domain name, RFC 8252 §7.1), which also rules out
+///   `javascript:`, `data:`, and `file:`;
+/// - no user information in the authority.
+pub fn redirect_uri_allowed(uri: &str) -> bool {
+    let Ok(url) = url::Url::parse(uri) else {
+        return false;
+    };
+    if url.fragment().is_some() || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    match url.scheme() {
+        "https" => url.host().is_some(),
+        "http" => matches!(
+            url.host(),
+            Some(url::Host::Domain("localhost"))
+                | Some(url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST))
+                | Some(url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST))
+        ),
+        scheme => scheme.contains('.'),
+    }
+}
+
 /// Per-client enforcement metadata (ADR 0018). Each flag uses the RFC client
 /// metadata name and makes an optional mechanism mandatory for that client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -166,5 +194,38 @@ impl ClientRegistry {
         let before = self.clients.len();
         self.clients.retain(|c| c.client_id != client_id);
         self.clients.len() != before
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redirect_uri_allowed;
+
+    #[test]
+    fn redirect_uri_rules() {
+        for ok in [
+            "https://app.example/cb",
+            "https://app.example:8443/cb?x=1",
+            "http://localhost:9999/cb",
+            "http://127.0.0.1:9999/cb",
+            "http://[::1]/cb",
+            "com.example.app:/oauth2redirect",
+        ] {
+            assert!(redirect_uri_allowed(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "/relative/cb",
+            "https://app.example/cb#frag",
+            "http://app.example/cb",
+            "http://127.0.0.2/cb",
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "file:///etc/passwd",
+            "myapp:/cb",
+            "https://user:pw@app.example/cb",
+        ] {
+            assert!(!redirect_uri_allowed(bad), "{bad}");
+        }
     }
 }

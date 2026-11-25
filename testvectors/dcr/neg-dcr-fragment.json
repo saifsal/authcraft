@@ -1,0 +1,15 @@
+{
+  "id": "neg-dcr-fragment",
+  "source": "generated",
+  "description": "A redirect URI with a fragment is rejected (RFC 6749 \u00a73.1.2).",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "https://dyn.example/cb#x"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

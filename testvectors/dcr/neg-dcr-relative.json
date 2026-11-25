@@ -1,0 +1,15 @@
+{
+  "id": "neg-dcr-relative",
+  "source": "generated",
+  "description": "A relative redirect URI is rejected.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "/cb"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

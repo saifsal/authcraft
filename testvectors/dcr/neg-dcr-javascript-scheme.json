@@ -1,0 +1,15 @@
+{
+  "id": "neg-dcr-javascript-scheme",
+  "source": "generated",
+  "description": "A javascript: redirect URI is rejected.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "javascript:alert(1)"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

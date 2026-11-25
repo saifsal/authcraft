@@ -1,0 +1,14 @@
+{
+  "id": "pos-dcr-private-use-scheme",
+  "source": "generated",
+  "description": "A reverse-domain private-use scheme is allowed (RFC 8252 \u00a77.1).",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "com.example.app:/oauth2redirect"
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

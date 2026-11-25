@@ -1,0 +1,14 @@
+{
+  "id": "pos-dcr-loopback-http",
+  "source": "generated",
+  "description": "Plain http is allowed for a loopback redirect URI (RFC 8252 \u00a77.3).",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "http://127.0.0.1:9999/cb"
+    ]
+  },
+  "expect": {
+    "ok": true
+  }
+}

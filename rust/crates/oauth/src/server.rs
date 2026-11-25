@@ -545,6 +545,7 @@ impl AuthorizationServer {
         self.require_admin(admin_token)?;
         if client.client_id.trim().is_empty()
             || (client.redirect_uris.is_empty() && !client.resource_server)
+            || !client.redirect_uris.iter().all(|u| crate::client::redirect_uri_allowed(u))
             || !Self::validate_client_metadata(&client)
             || !self.tls_client_auth_available(&client)
         {
@@ -884,7 +885,7 @@ impl AuthorizationServer {
         req: &DynamicClientRequest,
     ) -> Result<DynamicClientSuccess, OAuthError> {
         if req.redirect_uris.is_empty()
-            || req.redirect_uris.iter().any(|u| u.trim().is_empty())
+            || !req.redirect_uris.iter().all(|u| crate::client::redirect_uri_allowed(u))
         {
             return Err(OAuthError::InvalidRequest);
         }

@@ -1,0 +1,16 @@
+{
+  "id": "neg-dcr-one-bad-uri",
+  "source": "generated",
+  "description": "One invalid URI rejects the whole registration.",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "https://dyn.example/cb",
+      "http://dyn.example/cb"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

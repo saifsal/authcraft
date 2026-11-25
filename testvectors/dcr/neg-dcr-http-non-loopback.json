@@ -1,0 +1,15 @@
+{
+  "id": "neg-dcr-http-non-loopback",
+  "source": "generated",
+  "description": "Plain http for a non-loopback host is rejected (RFC 9700 \u00a72.1).",
+  "steps": {
+    "action": "register",
+    "redirect_uris": [
+      "http://dyn.example/cb"
+    ]
+  },
+  "expect": {
+    "ok": false,
+    "error": "invalid_request"
+  }
+}

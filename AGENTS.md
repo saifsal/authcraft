@@ -35,7 +35,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── 0016-protected-introspection.md # authenticated /introspect, resource servers
 │   │   ├── 0017-mutual-tls.md             # HTTPS listener, RFC 8705 mTLS
 │   │   ├── 0018-enforcement-metadata.md   # mandatory PAR / DPoP / cert binding
-│   │   └── 0019-pki-tls-client-auth.md    # tls_client_auth (CA-issued certs, SAN match)
+│   │   ├── 0019-pki-tls-client-auth.md    # tls_client_auth (CA-issued certs, SAN match)
+│   │   └── 0020-redirect-uri-registration.md # https / loopback / private-use schemes only
 │   ├── rfc-conformance.md                 # scope map per milestone
 │   ├── rfc-9700-checklist.md              # OAuth security BCP status
 │   ├── openid-conformance-checklist.md    # OIDF-style OP expectations

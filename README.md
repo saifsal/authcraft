@@ -270,6 +270,7 @@ Useful design notes while changing verification:
 - [`docs/adr/0017-mutual-tls.md`](docs/adr/0017-mutual-tls.md) — optional HTTPS listener and OAuth mutual TLS (RFC 8705).
 - [`docs/adr/0018-enforcement-metadata.md`](docs/adr/0018-enforcement-metadata.md) — per-client mandatory PAR, DPoP, and certificate binding.
 - [`docs/adr/0019-pki-tls-client-auth.md`](docs/adr/0019-pki-tls-client-auth.md) — PKI mutual-TLS client authentication (`tls_client_auth`).
+- [`docs/adr/0020-redirect-uri-registration.md`](docs/adr/0020-redirect-uri-registration.md) — redirect URI registration rules.
 - [`docs/oauth-m8.md`](docs/oauth-m8.md) — M8 assurance runbook.
 - [`docs/openid-conformance-checklist.md`](docs/openid-conformance-checklist.md) — OIDF-style OP expectations vs authcraft.
 - [`docs/oauth-m3.md`](docs/oauth-m3.md) — M3 token lifecycle runbook.

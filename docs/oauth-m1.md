@@ -21,7 +21,7 @@ From `rust/`:
 ```bash
 cargo test -p oauth
 cargo test -p oauth-http
-cargo run -p oauth-http
+cargo run -p oauth-http -- --demo
 ```
 
 The demo listens on `http://127.0.0.1:8089` with a stub `/login`, ephemeral

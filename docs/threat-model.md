@@ -176,7 +176,9 @@ Ordered by how much each one matters if the code were reused.
 - **R1. Bearer tokens by default.** Sender-constraint is opt-in so the
   walkthroughs work. Anyone reusing this code should turn on
   `require_sender_constrained_tokens` or the per-client flags (ADR 0018).
-- **R2. Open dynamic registration.** Anyone can register clients. Combined
+- **R2. Open dynamic registration.** Closed in production (ADR 0023:
+  clients come from a configuration file). Under `--demo`, anyone can
+  register clients. Combined
   with no client expiry, this enables consent phishing under a chosen
   `client_name` and memory growth. Production servers usually require an
   initial access token (RFC 7591 §3).
@@ -184,8 +186,8 @@ Ordered by how much each one matters if the code were reused.
   costs an Argon2id hash. TOTP is locked out (ADR 0022); passwords and the
   endpoints in general are not.
 - **R4. Demo secrets.** `DEMO_ADMIN_TOKEN` and the demo password for `alice`
-  are published constants. They exist for the walkthroughs and must not be
-  reused.
+  are published constants. Since ADR 0023 they exist only under `--demo`;
+  production refuses the demo admin token and seeds no users.
 - **R5. Pending tickets never expire.** Login and MFA tickets in `AppState`
   stay until used, so abandoned logins accumulate.
 - **R6. Sidecar transport.** `authcraft-edge` has no TLS. It is meant to sit

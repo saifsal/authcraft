@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod config;
 pub mod tls;
 
 use std::collections::HashMap;
@@ -49,6 +50,9 @@ pub struct AppState {
     /// Optional LDAP-style directory (in-memory for demos/tests).
     pub directory: Option<Arc<dyn DirectoryBind>>,
     http: reqwest::Client,
+    /// Mark cookies `Secure` even on plain HTTP, for a TLS-terminating
+    /// reverse proxy in front (ADR 0023).
+    pub secure_cookies: bool,
 }
 
 impl AppState {
@@ -61,7 +65,30 @@ impl AppState {
             oidc_pending: Arc::new(Mutex::new(HashMap::new())),
             directory: None,
             http: reqwest::Client::new(),
+            secure_cookies: false,
         }
+    }
+
+    /// Production state (ADR 0023): no demo user, no demo admin token, no
+    /// open registration. `clients` come from configuration and are checked
+    /// with `AuthorizationServer::client_is_valid`.
+    pub fn production(
+        mut config: ServerConfig,
+        clients: Vec<Client>,
+        signing: SigningKey,
+    ) -> Result<Self, config::ConfigError> {
+        config.dynamic_registration = false;
+        if config.admin_token == DEMO_ADMIN_TOKEN {
+            return Err("refusing to run production with the published demo admin token".into());
+        }
+        let state = Self::new(config, Vec::new(), signing);
+        for client in clients {
+            if !state.server.client_is_valid(&client) {
+                return Err(format!("client {}: invalid configuration", client.client_id).into());
+            }
+            state.server.add_client(client);
+        }
+        Ok(state)
     }
 
     pub fn with_oidc_rp(mut self, cfg: OidcRpConfig) -> Self {
@@ -591,7 +618,7 @@ async fn authorize(
                     "authcraft_login={ticket}; Path=/; HttpOnly; SameSite=Lax{}",
                     // RFC 6265 §4.1.2.5: never send the ticket over plain HTTP
                     // once the AS is served over HTTPS (ADR 0021).
-                    if https.is_some() { "; Secure" } else { "" }
+                    if https.is_some() || state.secure_cookies { "; Secure" } else { "" }
                 ))
                 .expect("cookie header"),
             );
@@ -643,6 +670,11 @@ async fn register_client(
     State(state): State<AppState>,
     Json(body): Json<RegisterClientBody>,
 ) -> Response {
+    // Production servers configure clients instead (ADR 0023); discovery
+    // omits `registration_endpoint` too.
+    if !state.server.config.dynamic_registration {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let req = DynamicClientRequest {
         redirect_uris: body.redirect_uris.unwrap_or_default(),
         client_name: body.client_name,

@@ -38,7 +38,8 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── 0019-pki-tls-client-auth.md    # tls_client_auth (CA-issued certs, SAN match)
 │   │   ├── 0020-redirect-uri-registration.md # https / loopback / private-use schemes only
 │   │   ├── 0021-http-security-headers.md  # framing, referrer, no-store, HSTS
-│   │   └── 0022-second-factor-throttling.md # TOTP lockout + replay protection
+│   │   ├── 0022-second-factor-throttling.md # TOTP lockout + replay protection
+│   │   └── 0023-production-mode.md        # --demo vs production, clients file, key file
 │   ├── rfc-conformance.md                 # scope map per milestone
 │   ├── rfc-9700-checklist.md              # OAuth security BCP status
 │   ├── threat-model.md                    # assets, adversaries, mitigations, residual risks
@@ -92,6 +93,7 @@ M0 verifier work is in place (Rust, Zig, Go, shared vectors, CI, Zig C ABI, `aut
 │   │   ├── src/main.rs                    # binds 127.0.0.1:8089; HTTPS when AUTHCRAFT_TLS_* set
 │   │   ├── src/lib.rs                     # HTTP routes for every endpoint
 │   │   ├── src/tls.rs                     # rustls listener, optional client certs (ADR 0017)
+│   │   ├── src/config.rs                  # clients file, signing-key file, secrets (ADR 0023)
 │   │   ├── tests/e2e.rs                   # authorize → login → token → jose verify
 │   │   ├── tests/confidential.rs          # private_key_jwt + JAR + introspect over HTTP
 │   │   └── tests/mtls.rs                  # self-signed mTLS + bound tokens over real TLS
@@ -177,7 +179,7 @@ From `rust/`, with stable Rust on `PATH`:
 cargo build --workspace
 cargo test --workspace
 cargo clippy --all-targets --all-features -- -D warnings
-cargo run -p oauth-http
+cargo run -p oauth-http -- --demo
 ```
 
 `cargo test --workspace` and Clippy with `-D warnings` must pass on stable. That suite includes `jose`, `jose-cli`, `oauth` (including `testvectors/oauth/` and `testvectors/oidc/`), and `oauth-http` e2e. See [`docs/oauth-m1.md`](docs/oauth-m1.md) and [`docs/oauth-m2.md`](docs/oauth-m2.md).
@@ -258,7 +260,7 @@ Local tooling:
 
 - The tree is the source of truth for what runs. M1 OAuth is Rust-only so far (`oauth` + `oauth-http`); there is no Zig/Go OAuth harness yet. Rust, Zig, and Go JOSE verifiers agree on the shared JOSE vectors; the Go harness differentially checks Go against `jose-cli`. `go/harness/oauth_jwt_test.go` re-verifies the JWTs in `testvectors/client_auth/`, `jar/`, and `introspect/` at the JWT layer only; its `jwtVerdicts` table must classify every vector file in those directories.
 - `testvectors/generated/` holds the ADR 0003 minimum negative vector set and positive time-boundary cases. `testvectors/rfc/` holds compact examples copied from RFC 7515 and RFC 8037. They are run against Rust (`tests/vectors.rs`), Zig (`zig/src/vectors.zig`), and Go (`go/harness`). The examples whose headers have no `kid` expect `key_not_found`; their signature bytes are checked by `rfc_signatures_match_when_kid_is_absent` in each language. `testvectors/oauth/` is the M1 contract and `testvectors/oidc/` is the M2 contract for the Rust `oauth` crate (ADR 0005 / ADR 0006). Unit tests are not a substitute for those suites; `docs/rfc-conformance.md` says so.
-- `cargo test` does start the `oauth-http` e2e harness in-process; `cargo run -p oauth-http` is the interactive demo. Set `AUTHCRAFT_TLS_CERT` and `AUTHCRAFT_TLS_KEY` to PEM files to serve HTTPS (optional mTLS) instead, and `AUTHCRAFT_TLS_CLIENT_CA` to trust a CA for `tls_client_auth`; `tests/mtls.rs` starts a real TLS listener on an ephemeral loopback port. There is still no production deployment.
+- `cargo test` does start the `oauth-http` e2e harness in-process; `cargo run -p oauth-http -- --demo` is the interactive demo; without `--demo` the binary needs `--data-dir` and `--public-url` (production mode, ADR 0023) and refuses to start otherwise. Set `AUTHCRAFT_TLS_CERT` and `AUTHCRAFT_TLS_KEY` to PEM files to serve HTTPS (optional mTLS) instead, and `AUTHCRAFT_TLS_CLIENT_CA` to trust a CA for `tls_client_auth`; `tests/mtls.rs` starts a real TLS listener on an ephemeral loopback port. There is still no production deployment.
 - `docs/threat-model.md` is the threat model. Update it when a change adds an endpoint, credential, token type, or trust boundary, or closes one of its residual risks.
 - Rust older than 1.88 does not compile `b64url.rs`. A default toolchain of 1.83 fails even though `Cargo.lock` resolves.
 - `Jwks::parse` fails the whole document on bad JSON, a missing `keys` array, a non-object entry, a non-string `kid`, or a duplicate `kid`. An entry that is present but unusable (unknown `kty` or `crv`, bad base64url, wrong length, non-string `alg` or `use`, `oct` key under 32 bytes) stays in the set and can never be selected (`key_not_found`). Private members such as `d` are ignored.

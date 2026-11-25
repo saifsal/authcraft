@@ -21,7 +21,7 @@ From `rust/`:
 ```bash
 cargo test -p oauth
 cargo test -p oauth-http
-cargo run -p oauth-http
+cargo run -p oauth-http -- --demo
 ```
 
 OIDC demo: authorize with `scope=openid` and a `nonce`, complete stub login,

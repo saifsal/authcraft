@@ -31,7 +31,7 @@ Serve HTTPS with optional client certificates:
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
   -keyout srv.key -out srv.pem -days 30 -subj "/CN=localhost" \
   -addext "subjectAltName=DNS:localhost"
-AUTHCRAFT_TLS_CERT=srv.pem AUTHCRAFT_TLS_KEY=srv.key cargo run -p oauth-http
+AUTHCRAFT_TLS_CERT=srv.pem AUTHCRAFT_TLS_KEY=srv.key cargo run -p oauth-http -- --demo
 curl --cacert srv.pem https://localhost:8089/.well-known/openid-configuration
 ```
 

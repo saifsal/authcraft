@@ -10,6 +10,7 @@ name = "oauth-http"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "4", features = ["derive", "env"] }
 oauth = { path = "../oauth" }
 jose = { path = "../jose" }
 axum = { version = "0.8", features = ["form"] }

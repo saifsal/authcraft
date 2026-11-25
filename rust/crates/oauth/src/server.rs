@@ -61,6 +61,9 @@ pub struct ServerConfig {
     /// DER certificates of the CAs trusted for `tls_client_auth` client
     /// certificates (RFC 8705 §2.1, ADR 0019). Empty disables the method.
     pub tls_client_auth_trust_anchors: Vec<Vec<u8>>,
+    /// RFC 7591 open registration at `/register` (ADR 0011 B2). Production
+    /// deployments turn it off and configure clients instead (ADR 0023).
+    pub dynamic_registration: bool,
 }
 
 /// Published demo admin bearer token (educational only).
@@ -89,6 +92,7 @@ impl ServerConfig {
             require_client_assertion_typ: false,
             require_sender_constrained_tokens: false,
             tls_client_auth_trust_anchors: Vec::new(),
+            dynamic_registration: true,
         }
     }
 }
@@ -523,6 +527,20 @@ impl AuthorizationServer {
         Ok(())
     }
 
+    /// Whether `client` is a valid registration for this server: redirect URIs
+    /// (ADR 0020), auth-method and policy metadata (ADR 0014–0019). Used for
+    /// clients loaded from configuration as well as the admin API.
+    pub fn client_is_valid(&self, client: &Client) -> bool {
+        !client.client_id.trim().is_empty()
+            && (!client.redirect_uris.is_empty() || client.resource_server)
+            && client
+                .redirect_uris
+                .iter()
+                .all(|u| crate::client::redirect_uri_allowed(u))
+            && Self::validate_client_metadata(client)
+            && self.tls_client_auth_available(client)
+    }
+
     /// `tls_client_auth` needs configured trust anchors (ADR 0019).
     fn tls_client_auth_available(&self, client: &Client) -> bool {
         !matches!(client.token_endpoint_auth, TokenEndpointAuth::TlsClientAuth { .. })
@@ -550,6 +568,13 @@ impl AuthorizationServer {
         }
     }
 
+    /// Adds a configured client without the admin token (startup only).
+    /// Returns `false` if the `client_id` exists. Callers check
+    /// [`Self::client_is_valid`] first.
+    pub fn add_client(&self, client: Client) -> bool {
+        self.clients.lock().expect("clients lock").insert(client)
+    }
+
     /// List registered clients (admin).
     pub fn list_clients(&self, admin_token: Option<&str>) -> Result<Vec<Client>, AdminError> {
         self.require_admin(admin_token)?;
@@ -564,12 +589,7 @@ impl AuthorizationServer {
         client: Client,
     ) -> Result<Client, AdminError> {
         self.require_admin(admin_token)?;
-        if client.client_id.trim().is_empty()
-            || (client.redirect_uris.is_empty() && !client.resource_server)
-            || !client.redirect_uris.iter().all(|u| crate::client::redirect_uri_allowed(u))
-            || !Self::validate_client_metadata(&client)
-            || !self.tls_client_auth_available(&client)
-        {
+        if !self.client_is_valid(&client) {
             return Err(AdminError::InvalidRequest);
         }
         let mut reg = self.clients.lock().expect("clients lock");
@@ -924,7 +944,12 @@ impl AuthorizationServer {
     pub fn openid_configuration(&self) -> String {
         let iss = token::json_escape(&self.config.issuer);
         format!(
-            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect","registration_endpoint":"{iss}/register","pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"request_parameter_supported":true,"request_uri_parameter_supported":false,"request_object_signing_alg_values_supported":["EdDSA","ES256"],"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth","tls_client_auth"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"revocation_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth","tls_client_auth"],"introspection_endpoint_auth_methods_supported":["private_key_jwt","self_signed_tls_client_auth","tls_client_auth"],"tls_client_certificate_bound_access_tokens":true,"scopes_supported":["openid","profile","email"]}}"#,
+            r#"{{"issuer":"{iss}","authorization_endpoint":"{iss}/authorize","token_endpoint":"{iss}/token","userinfo_endpoint":"{iss}/userinfo","revocation_endpoint":"{iss}/revoke","introspection_endpoint":"{iss}/introspect",{registration}"pushed_authorization_request_endpoint":"{iss}/par","require_pushed_authorization_requests":{require_par},"authorization_response_iss_parameter_supported":true,"request_parameter_supported":true,"request_uri_parameter_supported":false,"request_object_signing_alg_values_supported":["EdDSA","ES256"],"dpop_signing_alg_values_supported":["EdDSA"],"jwks_uri":"{iss}/.well-known/jwks.json","response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["EdDSA"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth","tls_client_auth"],"token_endpoint_auth_signing_alg_values_supported":["EdDSA","ES256"],"revocation_endpoint_auth_methods_supported":["none","private_key_jwt","self_signed_tls_client_auth","tls_client_auth"],"introspection_endpoint_auth_methods_supported":["private_key_jwt","self_signed_tls_client_auth","tls_client_auth"],"tls_client_certificate_bound_access_tokens":true,"scopes_supported":["openid","profile","email"]}}"#,
+            registration = if self.config.dynamic_registration {
+                format!(r#""registration_endpoint":"{iss}/register","#)
+            } else {
+                String::new()
+            },
             require_par = if self.config.require_par {
                 "true"
             } else {
@@ -939,6 +964,9 @@ impl AuthorizationServer {
         &self,
         req: &DynamicClientRequest,
     ) -> Result<DynamicClientSuccess, OAuthError> {
+        if !self.config.dynamic_registration {
+            return Err(OAuthError::UnauthorizedClient);
+        }
         if req.redirect_uris.is_empty()
             || !req.redirect_uris.iter().all(|u| crate::client::redirect_uri_allowed(u))
         {

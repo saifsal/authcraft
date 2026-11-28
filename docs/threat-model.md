@@ -163,6 +163,20 @@ residual risk), or **open** (worth fixing).
 | Admin token is a published demo constant | `DEMO_ADMIN_TOKEN` is set by `AppState::demo()` | accepted (demo only, see R4) |
 | Privilege escalation through registration | DCR cannot grant `resource_server`; inconsistent auth or binding metadata refused (ADR 0016, 0018) | mitigated |
 
+### Relying parties (tacto, glossa; M9)
+
+The relying-party code lives in those repos (`src/oidc.zig`, `src/oidc.rs`);
+this table records what authcraft depends on them doing.
+
+| Threat | Mitigation | Status |
+|---|---|---|
+| Stolen client credential | `private_key_jwt` with an Ed25519 key created on the VPS and loaded through `LoadCredential`; authcraft holds only the public JWK (ADR 0014, 0023) | mitigated |
+| Callback injection / login CSRF at the relying party | `state` bound to the browser by a 10-minute `HttpOnly` cookie, single use; PKCE S256; `nonce` | mitigated |
+| Mix-up or forged ID token | RFC 9207 `iss` on the callback; exact discovery `issuer`; EdDSA ID token checked against the JWKS for `iss`, `aud`, `exp`, `iat`, `nonce` | mitigated |
+| Account takeover through email matching | Relying parties never create or match accounts by email; a signed-in user links an identity, and an identity links to one account only | mitigated |
+| Linking an attacker's identity to a victim's account | Link starts from a CSRF-checked POST, and the callback must arrive in the browser still signed in as the starting account | mitigated |
+| Relying-party sessions outliving an authcraft logout | No back-channel or RP-initiated logout (ADR 0026) | accepted (see R9) |
+
 ### Availability
 
 | Threat | Mitigation | Status |
@@ -207,6 +221,10 @@ Ordered by how much each one matters if the code were reused.
   token until it expires (at most 300 s).
 - **R8. No audit log.** Security events (failed logins, lockouts, refresh
   reuse, admin actions) are not recorded.
+- **R9. Logout does not propagate.** Signing out of authcraft leaves tacto and
+  glossa sessions alive (14 days there), and signing out of an app leaves the
+  authcraft SSO session (24 h). OIDC back-channel or RP-initiated logout would
+  close this.
 
 ## Fixed while writing this model
 
